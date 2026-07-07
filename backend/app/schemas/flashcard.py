@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -20,8 +21,8 @@ class FlashcardCreateRequest(BaseModel):
 
 
 class FlashcardResponse(ORMModel):
-    id: str
-    user_id: str
+    id: UUID
+    user_id: UUID
     card_type: CardType
     front_content: str
     back_content: str

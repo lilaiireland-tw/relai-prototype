@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -7,7 +8,7 @@ from app.schemas.common import ORMModel
 
 
 class UserStatsResponse(ORMModel):
-    user_id: str
+    user_id: UUID
     streak_days: int
     last_active_date: date | None
     total_cards_created: int

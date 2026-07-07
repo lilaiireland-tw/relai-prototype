@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -7,14 +8,14 @@ from app.schemas.common import ORMModel
 
 
 class ReviewSubmitRequest(BaseModel):
-    flashcard_id: str
+    flashcard_id: UUID
     rating: ReviewRating
 
 
 class ReviewEventResponse(ORMModel):
-    id: str
-    user_id: str
-    flashcard_id: str
+    id: UUID
+    user_id: UUID
+    flashcard_id: UUID
     rating: ReviewRating
     reviewed_at: datetime
     due_before_review: datetime | None
