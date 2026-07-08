@@ -20,7 +20,7 @@ class ReviewService:
         self.stats = StatsRepository(db)
 
     def submit_review(self, user_id: str, flashcard_id: str, rating: ReviewRating) -> tuple[ReviewEvent, int, int]:
-        self.users.get_or_create_local_user(user_id)
+        self.users.get_required(user_id)
         flashcard = self.flashcards.get_for_user(flashcard_id=flashcard_id, user_id=user_id)
         if flashcard is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flashcard not found")
@@ -62,5 +62,5 @@ class StatsService:
         self.stats = StatsRepository(db)
 
     def get_user_stats(self, user_id: str):
-        self.users.get_or_create_local_user(user_id)
+        self.users.get_required(user_id)
         return self.stats.get_or_create(user_id)

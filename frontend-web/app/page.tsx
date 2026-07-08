@@ -54,13 +54,13 @@ export default function SplashPage() {
 
       <div className="flex flex-col gap-3">
         <Link
-          href="/home"
+          href="/auth?mode=login"
           className="flex h-12 w-full items-center justify-center rounded-xl bg-irish-green text-base font-semibold text-white transition-colors hover:bg-irish-green-dark"
         >
           開始使用
         </Link>
         <Link
-          href="/home"
+          href="/auth?mode=register"
           className="flex h-12 w-full items-center justify-center rounded-xl border border-gray-200 text-base font-semibold text-text-primary transition-colors hover:bg-card-gray"
         >
           登入 / 註冊

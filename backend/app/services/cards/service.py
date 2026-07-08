@@ -15,7 +15,7 @@ class FlashcardService:
         self.stats = StatsRepository(db)
 
     def create_flashcard(self, user_id: str, payload: FlashcardCreateRequest) -> Flashcard:
-        self.users.get_or_create_local_user(user_id)
+        self.users.get_required(user_id)
         flashcard = Flashcard(user_id=user_id, **payload.model_dump())
         created = self.flashcards.create(flashcard)
 
@@ -27,7 +27,7 @@ class FlashcardService:
         return created
 
     def list_flashcards(self, user_id: str, limit: int, offset: int) -> tuple[list[Flashcard], int]:
-        self.users.get_or_create_local_user(user_id)
+        self.users.get_required(user_id)
         items = self.flashcards.list_for_user(user_id=user_id, limit=limit, offset=offset)
         total = self.flashcards.count_for_user(user_id=user_id)
         return items, total

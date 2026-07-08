@@ -30,6 +30,7 @@ class UserAccount(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     display_name: Mapped[str | None] = mapped_column(String(100))
     auth_provider: Mapped[AuthProvider] = mapped_column(
         SqlEnum(AuthProvider, name="auth_provider_enum"),
@@ -50,6 +51,7 @@ class UserAccount(TimestampMixin, Base):
     stats: Mapped["UserStat | None"] = relationship(back_populates="user", uselist=False)
     settings: Mapped["UserSetting | None"] = relationship(back_populates="user", uselist=False)
     achievements: Mapped[list["UserAchievement"]] = relationship(back_populates="user")
+    revoked_tokens: Mapped[list["RevokedToken"]] = relationship(back_populates="user")
 
 
 class SourceItem(TimestampMixin, Base):
@@ -144,3 +146,20 @@ class UserAchievement(Base):
 
     user: Mapped["UserAccount"] = relationship(back_populates="achievements")
     achievement: Mapped["Achievement"] = relationship(back_populates="users")
+
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    token_type: Mapped[str] = mapped_column(String(32), nullable=False, default="access")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped["UserAccount"] = relationship(back_populates="revoked_tokens")

@@ -2,56 +2,25 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Layers, BarChart2, Settings } from "lucide-react";
+import { BookOpen, Home, Languages, LogOut } from "lucide-react";
+
+import { useAuth } from "@/components/AuthProvider";
 
 const tabs = [
-  { key: "home", label: "首頁", href: "/home", icon: Home, enabled: true },
-  {
-    key: "cards",
-    label: "卡片庫",
-    href: "/flashcards",
-    icon: Layers,
-    enabled: true,
-  },
-  {
-    key: "stats",
-    label: "統計",
-    href: "#",
-    icon: BarChart2,
-    enabled: false,
-  },
-  {
-    key: "settings",
-    label: "設定",
-    href: "#",
-    icon: Settings,
-    enabled: false,
-  },
+  { key: "home", label: "首頁", href: "/home", icon: Home },
+  { key: "cards", label: "單字卡", href: "/flashcards", icon: BookOpen },
+  { key: "errors", label: "錯誤卡", href: "/error-log", icon: Languages },
 ];
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const { logout } = useAuth();
 
   return (
     <nav className="sticky bottom-0 z-10 flex border-t border-gray-100 bg-white px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
       {tabs.map((tab) => {
-        const isActive =
-          tab.href !== "#" &&
-          (pathname === tab.href || pathname.startsWith(tab.href));
+        const isActive = pathname === tab.href || pathname.startsWith(`${tab.href}/`);
         const Icon = tab.icon;
-
-        if (!tab.enabled) {
-          return (
-            <div
-              key={tab.key}
-              className="flex flex-1 cursor-not-allowed flex-col items-center gap-1 py-1 text-gray-300"
-              aria-disabled
-            >
-              <Icon size={22} strokeWidth={isActive ? 2.5 : 2} />
-              <span className="text-[11px]">{tab.label}</span>
-            </div>
-          );
-        }
 
         return (
           <Link
@@ -66,6 +35,15 @@ export default function BottomNav() {
           </Link>
         );
       })}
+
+      <button
+        type="button"
+        onClick={() => void logout()}
+        className="flex flex-1 flex-col items-center gap-1 py-1 text-text-secondary transition-colors hover:text-irish-green"
+      >
+        <LogOut size={22} />
+        <span className="text-[11px] font-medium">登出</span>
+      </button>
     </nav>
   );
 }
