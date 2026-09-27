@@ -49,8 +49,8 @@ yarn-error.log*
 # vercel
 .vercel
 
-# claude code local settings (may contain command history with secrets)
-.claude/settings.local.json
+# claude code local settings (machine-specific, may contain command history with secrets)
+.claude/
 
 # typescript
 *.tsbuildinfo
