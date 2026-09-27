@@ -1,7 +1,6 @@
-import { Hono } from 'hono'
-
-const app = new Hono()
-
-app.get('/api/v1/health', (context) => context.json({ status: 'ok' }))
-
-export default app
+// Static assets serve the client; application API routing belongs to Issue #11.
+export default {
+  fetch(): Response {
+    return new Response(null, { status: 404 })
+  },
+}
