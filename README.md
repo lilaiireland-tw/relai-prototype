@@ -770,6 +770,30 @@ npm test
 npm run build
 ```
 
+### Pull request CI (Issue #13)
+
+`.github/workflows/ci.yml` runs on pull requests targeting `develop` or `main`
+when opened, reopened, or updated with new commits. The `CI` workflow runs the
+`Repository quality checks` job on Ubuntu with Node.js 24 LTS, which satisfies
+the current locked dependencies' Node requirements. npm's download cache is
+keyed by the root `package-lock.json`; dependencies are installed with `npm ci`
+on every run.
+
+The job runs these root repository commands in order:
+
+```bash
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+Any command failure fails the job and appears in the PR checks; later commands
+are skipped. CI requires no Cloudflare production secrets, Gemini secrets, or
+D1 credentials. It performs quality checks only, with no deployment, D1
+migrations, or automatic merging. Deployment remains a separate process.
+
 ---
 
 ## 14. Deployment
