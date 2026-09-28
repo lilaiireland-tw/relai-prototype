@@ -11,7 +11,14 @@ describe('Worker API', () => {
     expect(await response.json()).toEqual({ status: 'ok' })
   })
 
-  it.each(['/relaiapp/api/v1', '/relaiapp/api/v1/', '/relaiapp/api/v1/unknown'])(
+  it.each([
+    '/relaiapp/api',
+    '/relaiapp/api/',
+    '/relaiapp/api/v1',
+    '/relaiapp/api/v1/',
+    '/relaiapp/api/v1/unknown',
+    '/relaiapp/api/v2/health',
+  ])(
     'returns JSON 404 for %s',
     async (path) => {
       const response = await createApp().request(path, { headers: { Accept: 'text/html' } })
@@ -53,7 +60,7 @@ describe('Worker API', () => {
     })
   })
 
-  it.each(['/relaiapp/home', '/relaiapp/api/v10/health', '/api/v1/health'])(
+  it.each(['/relaiapp/home', '/relaiapp/apiary/health', '/api/v1/health'])(
     'does not claim %s as an API route',
     async (path) => {
       const response = await createApp().request(path)

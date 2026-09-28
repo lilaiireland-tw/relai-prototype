@@ -723,10 +723,30 @@ and request `GET /relaiapp/api/v1/health` to receive HTTP 200 with
 `{"status":"ok"}`. This endpoint checks runtime availability only.
 
 API routing is grouped in `src/worker/routes/api.ts`. Wrangler runs the Worker
-first for `/relaiapp/api/v1` and `/relaiapp/api/v1/*`, including browser navigation
+first for `/relaiapp/api` and `/relaiapp/api/*`, including browser navigation
 requests, while other paths retain static asset / SPA handling. Unknown API
 routes return JSON 404 with `error.code = NOT_FOUND`; unhandled API errors return
 JSON 500 with `error.code = INTERNAL_SERVER_ERROR` and a fixed safe message.
+
+### Client routing and base path (Issue #12)
+
+Open `/relaiapp/` when running `npm run dev` or `npm run preview`. React Router
+uses Vite's `/relaiapp/` base (without the trailing slash for its basename), with
+placeholders at `/relaiapp/login`, `/relaiapp/home`, `/relaiapp/cards`,
+`/relaiapp/stats`, and `/relaiapp/settings`. Both `/relaiapp` and `/relaiapp/`
+render the Home placeholder. The existing scaffold remains; legacy UI migration
+and authentication enforcement are separate tasks.
+
+Cloudflare's `single-page-application` asset handling serves `index.html` for
+direct navigation or refresh of client routes. Vite emits asset URLs under
+`/relaiapp/assets/`; `public/_redirects` rewrites those requests to the generated
+`/assets/` files without changing the browser URL. The entire `/relaiapp/api/*`
+namespace runs the Worker first, so unknown API versions also return JSON 404
+instead of SPA HTML. The v1 health response remains `{"status":"ok"}`.
+
+`npm test` covers client routing and Worker responses. `npm run test:routing`
+builds the app and checks deep links, emitted asset URLs, and API isolation
+against the local Cloudflare production preview.
 
 完成遷移後至少提供：
 
