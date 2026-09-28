@@ -23,6 +23,9 @@
 
 # production
 /build
+/dist
+/.wrangler/
+.dev.vars*
 
 # misc
 .DS_Store
