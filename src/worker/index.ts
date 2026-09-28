@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { api } from './routes/api'
 
 const apiBasePath = '/relaiapp/api/v1'
+const apiPrefix = '/relaiapp/api'
 
 export function createApp() {
   const app = new Hono()
@@ -9,7 +10,7 @@ export function createApp() {
   app.route(apiBasePath, api)
 
   app.notFound((c) => {
-    if (c.req.path === apiBasePath || c.req.path.startsWith(`${apiBasePath}/`)) {
+    if (c.req.path === apiPrefix || c.req.path.startsWith(`${apiPrefix}/`)) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'API route not found.' } }, 404)
     }
 
