@@ -76,6 +76,18 @@ contain Worker `relai-prototype` and `DB` -> `relai-prod-db`. Generated server
 configuration is ignored by Git. Neither ID nor either database name may appear
 in `dist/client`. Dry runs show the selected D1 resource without deploying it.
 
+## Migration source of truth (Issue #22)
+
+All D1 bindings explicitly point to repository-root `migrations/`. This directory
+is the v1 schema source of truth; legacy Supabase/Alembic SQL is not used.
+See [D1 migration workflow](d1-migrations.md) for exact create/list/apply commands,
+append-only rules, local persistence, and the explicit manual production runbook.
+Local operations use simulated D1; staging operations explicitly name
+`relai-staging-db` with source config and `--env staging --remote`. Production
+migration is an approved operator release action only. No migrations run through
+GitHub Actions, Cloudflare staging CD, or ordinary develop build/deploy commands.
+Issue #22 adds no SQL/application schema and applies no production migration.
+
 ## Deployment selection (commands documented, not executed)
 
 From `develop`, `npm run deploy` rebuilds staging before deploying. From `main`,
