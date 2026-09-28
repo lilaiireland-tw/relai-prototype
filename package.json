@@ -4,14 +4,17 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "vite --mode staging",
+    "build": "vite build --mode staging",
+    "build:production": "vite build --mode production",
     "preview": "npm run build && vite preview",
-    "lint": "eslint src scripts/routing.test.mjs vite.config.ts vitest.config.ts eslint.config.js",
+    "lint": "eslint src scripts/routing.test.mjs scripts/verify-d1-config.mjs vite.config.ts vitest.config.ts eslint.config.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && npm run verify:d1-config",
     "test:routing": "npm run build && node --test scripts/routing.test.mjs",
-    "deploy": "npm run build && wrangler deploy"
+    "verify:d1-config": "node scripts/verify-d1-config.mjs",
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:production": "npm run build:production && wrangler deploy"
   },
   "dependencies": {
     "hono": "^4.13.9",
