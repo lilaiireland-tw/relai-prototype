@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { log } from 'node:console'
-import { appendFile } from 'node:fs/promises'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL, URL } from 'node:url'
@@ -41,11 +40,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const urls = await verifyStagingHealth(process.env.STAGING_URL)
   log(`Staging health passed: ${urls.health}`)
   log(`Product Owner test URL: ${urls.app}`)
-  if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `app_url=${urls.app}\n`)
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    await appendFile(process.env.GITHUB_STEP_SUMMARY,
-      `### Staging deployment\n\nCommit: ${process.env.GITHUB_SHA}\n\n` +
-      `- [Test app](${urls.app})\n- [Health](${urls.health}): HTTP 200, \`{"status":"ok"}\`\n` +
-      '- Worker: `relai-prototype-staging`\n- Binding: `DB` -> `relai-staging-db`\n')
-  }
 }

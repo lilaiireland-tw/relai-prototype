@@ -781,23 +781,29 @@ migrations, or automatic merging. Deployment remains a separate process.
 
 ### Develop test deployment (Issue #15)
 
-GitHub Actions owns staging deployment through
-`.github/workflows/deploy-staging.yml`. Pushes to `develop` (including merged PRs)
-run validation, build staging, check the generated Worker/D1 configuration, deploy
-`relai-prototype-staging`, and verify `/relaiapp/api/v1/health`. Manual dispatch is
-allowed only on `develop`; `main`, feature branches and PR events cannot deploy
-through this workflow. Concurrent staging deployments are serialized.
+Cloudflare Workers Builds / Git integration is the sole automated staging deployer.
+GitHub Actions remains the CI quality gate only, through the existing
+`.github/workflows/ci.yml`. Connect the existing `relai-prototype-staging` Worker
+to `lilaiireland-tw/relai-prototype`, select `develop` as its deployment branch,
+and disable preview builds. Cloudflare's branch setting may be labelled
+"Production branch"; for this staging Worker it must be `develop`, not `main`.
+
+Set the Cloudflare Build command to `npm run build:staging:validated` and Deploy
+command to `npm run deploy:staging:built`. These commands run quality checks, build
+staging, verify the generated binding, check packaging, deploy that exact build,
+and verify `/relaiapp/api/v1/health`. They are invoked by Workers Builds; there is
+no GitHub Actions deployment workflow.
 
 Test app: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>.
 The staging environment explicitly enables `workers_dev`, has no custom routes,
-and binds `DB` only to `relai-staging-db`. Actions logs, deployment status and a
-successful run summary provide the source commit and test/health URLs.
+and binds `DB` only to `relai-staging-db`. Cloudflare build history and GitHub's
+Cloudflare check run provide deployment status; health logs print the test URL.
 
-Do not connect Cloudflare Workers Builds to this staging Worker while Actions owns
-deployment. The first staging smoke deployment used latest `develop` at `536ba8d`;
-automation requires the admin setup in [develop deployment](docs/develop-deployment.md).
-That guide records the missing CI credentials, deployment ownership, exact retry
-commands and validation evidence. No production deployment or migration is added.
+The first staging smoke deployment used latest `develop` at `536ba8d`. The Product
+Owner must connect the repository in Cloudflare after this PR is merged, using the
+exact Dashboard settings in [develop deployment](docs/develop-deployment.md).
+That guide records deployment ownership, retries and validation evidence.
+The Dashboard connection and first Workers Builds run remain pending.
 
 ### Application deployment lifecycle
 

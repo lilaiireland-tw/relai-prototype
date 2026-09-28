@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --mode staging",
     "build": "vite build --mode staging",
+    "build:staging:validated": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:staging-build",
     "build:production": "vite build --mode production",
     "preview": "npm run build && vite preview",
     "lint": "eslint src scripts/*.mjs vite.config.ts vitest.config.ts eslint.config.js",
@@ -16,6 +17,7 @@
     "verify:staging-build": "node scripts/verify-staging-build.mjs",
     "verify:staging-health": "node scripts/verify-staging-health.mjs",
     "deploy": "npm run build && npm run verify:staging-build && wrangler deploy --config dist/relai_prototype/wrangler.json",
+    "deploy:staging:built": "npm run verify:staging-build && wrangler deploy --config dist/relai_prototype/wrangler.json --dry-run && wrangler deploy --config dist/relai_prototype/wrangler.json && npm run verify:staging-health",
     "deploy:production": "npm run build:production && wrangler deploy"
   },
   "dependencies": {

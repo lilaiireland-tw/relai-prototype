@@ -1,6 +1,6 @@
 # Develop deployment — Issue #15
 
-| Source | Wrangler environment | Worker | Binding | Database |
+| Source | Environment | Worker | Binding | Database |
 |---|---|---|---|---|
 | `develop` | `staging` | `relai-prototype-staging` | `DB` | `relai-staging-db` |
 
@@ -10,135 +10,118 @@ Health: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/api/v
 
 ## Deployment ownership
 
-**GitHub Actions is the sole automated staging deployment owner.**
-`.github/workflows/deploy-staging.yml` deploys the exact triggering `develop`
-commit after lint, typecheck, tests and staging build. It compares the generated
-Vite configuration with the source staging D1 binding and rejects a production
-Worker, extra D1 bindings, changed database ID, disabled workers.dev or custom
-routes. Wrangler dry-run checks packaging before uploading. The workflow deploys
-the explicit generated config, never a production build retargeted at deploy time.
+**Cloudflare Workers Builds / Git integration is the single automated staging
+deployment owner.** GitHub Actions runs only the existing PR quality checks in
+`.github/workflows/ci.yml`. No Actions workflow deploys this environment, and no
+GitHub staging environment or deployment secrets are required.
 
-Pushes to `develop` and manual dispatch on `develop` are supported. The job's ref
-guard rejects manual dispatch on other branches. PR events and `main` do not
-trigger deployment. One concurrency group serializes staging deployments without
-cancelling an upload in progress. There are no DB migrations in this workflow.
+The repository supplies two commands for Cloudflare:
 
-Do not enable Cloudflare Workers Builds / Git integration for this Worker. The
-Worker did not exist before the Issue #15 bootstrap; it was created with Wrangler
-without connecting Workers Builds. If ownership changes later, disable the old
-deployment path before enabling its replacement. Do not connect both deployers.
-Manual Wrangler deployment is a bootstrap or recovery path only; coordinate it
-with the Actions owner so it does not overlap an active run.
+- `npm run build:staging:validated`: lint, typecheck, tests, staging build and
+  generated staging binding verification.
+- `npm run deploy:staging:built`: recheck the generated config, Wrangler packaging
+  dry-run, deploy that build and verify live health. It does not rebuild or retarget
+  a production build.
 
-## One-time admin setup
+Both use the locked local Wrangler. The config check rejects a production Worker,
+wrong/extra D1 bindings, disabled workers.dev and custom routes. The health check
+requires HTTPS on the stable staging workers.dev origin, HTTP 200, JSON content
+type and exactly `{"status":"ok"}` at `/relaiapp/api/v1/health`. It rejects redirects
+and retries up to six times with ten-second timeouts and five-second delays.
+Health checks runtime availability, not schema, auth, Gemini or product acceptance.
 
-A repository admin must configure **Settings → Environments → staging**:
+## Product Owner Dashboard setup
 
-1. Limit deployment branches to the branch `develop`, with no tags.
-2. Add environment secret `CLOUDFLARE_ACCOUNT_ID` for the account containing the
-   already-provisioned `relai-staging-db` and `relai-prototype-staging` Worker.
-3. Add environment secret `CLOUDFLARE_API_TOKEN` using an account-owned API token
-   with the Worker deployment permissions required by Wrangler. Scope it to the
-   intended account and the staging Worker wherever supported. A workers.dev-only
-   deployment needs no custom zone route permissions. Do not grant D1 management
-   permissions just to deploy a Worker with an existing D1 binding.
-4. Leave Cloudflare Workers Builds disconnected from the staging Worker.
+Perform this setup **after the revised PR is merged to `develop`**, so its commands
+exist on the selected branch. The connection has not been performed by Codex.
 
-Use Cloudflare's [Worker permissions](https://developers.cloudflare.com/workers/authorization/workers/)
-and [GitHub Actions authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
-when creating the token. Store it directly in GitHub's secret UI; do not paste it
-in an issue, PR, chat, source file or command argument. Do not copy local Wrangler
-OAuth credentials into CI. Gemini/auth secrets are not needed for this skeleton.
+1. Sign in to the Cloudflare account containing `relai-staging-db`. Open
+   **Workers & Pages → relai-prototype-staging → Settings → Builds → Connect**.
+   Reuse the existing Worker. [Connecting an existing Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker).
+2. Select GitHub. As the repository owner or an authorized GitHub App administrator,
+   install/authorize **Cloudflare Workers and Pages** for
+   `lilaiireland-tw/relai-prototype`. Choose that repository in Cloudflare.
+   [GitHub access](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/#manage-access).
+3. Enter the settings below before saving the connection. In **Settings → Build(s)
+   → Branch control**, confirm the deployment branch is `develop` and uncheck
+   **Enable Preview Builds**. The field labelled **Production branch** means this
+   Worker's active deployment branch; it must be `develop` for the staging Worker.
+   [Branch controls](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/).
 
-**Current setup limitation:** repository secret/variable inspection found no
-deployment credentials on 2026-09-28. The `staging` environment was absent;
-attempting to create it returned GitHub HTTP 403, “Must have admin rights to
-Repository.” No GitHub environment or secret was changed. The workflow fails
-explicitly if either credential is missing. The live staging smoke deployment
-passed using the existing local Cloudflare login; a successful automated run is
-pending admin setup and the Product Owner's merge to `develop`.
+| Dashboard setting | Required value |
+|---|---|
+| Git repository | `lilaiireland-tw/relai-prototype` |
+| Git / Production branch | `develop` |
+| Preview builds | Disabled |
+| Root directory | Repository root (`/`) |
+| Build command | `npm run build:staging:validated` |
+| Deploy command | `npm run deploy:staging:built` |
+| Build variable `CLOUDFLARE_ENV` | `staging` |
+| Build variable `STAGING_URL` | `https://relai-prototype-staging.lilaiireland.workers.dev` |
+| Build variable `NODE_VERSION` | `24` |
 
-## Status, retries and verification
+4. Under **Build Variables and Secrets**, set the three plain build variables in
+   the table. Use Cloudflare's Builds API-token selection for deployment
+   authentication. Keep credentials in Cloudflare; do not copy local OAuth tokens
+   into source or GitHub. [Build settings](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
+   [Node version selection](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/).
+5. Save the connection and inspect the first build. Confirm its source is the
+   merged `develop` SHA, the Worker is `relai-prototype-staging`, and deployment
+   logs list only `DB` → `relai-staging-db`. Confirm its final health check passed
+   and open the test app URL. If connection starts a build before branch settings
+   are finalized, cancel it and retry only after `develop` and previews are correct.
 
-After setup and merge, open **Actions → Deploy staging**. Each run records the
-source SHA, validation and deployment logs. After successful health verification,
-the job summary and GitHub staging deployment contain the app URL. Health failure
-fails the run even if the upload succeeded; inspect both Actions and the staging
-Worker's Cloudflare Deployments tab. A failed health check does not roll back code.
+No setup step targets `relai-prototype`, `relai-prod-db`, production routes or
+production promotion. Do not add a second Actions deployment workflow.
 
-For a retry, rerun a specific run (redeploys that run's SHA), or push a new
-reviewed commit to `develop`. GitHub requires a workflow to exist on the default
-branch before `workflow_dispatch` is available. This repo's default branch is
-`main`, so manual dispatch is pending normal promotion of the workflow file to
-`main`; this issue does not change that branch. Automatic `develop` push runs and
-their reruns work after this PR is merged. See
-[GitHub manual-run requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+## Status and retries
 
-Once dispatch is available, choose **Run workflow → develop** (deploys current
-develop) or use the CLI. Never select `main`; the job ref guard will skip it.
+Cloudflare build history exposes the source commit and build/deploy logs. Its
+GitHub check run links back to build details. Open the staging Worker's Builds
+history to inspect or retry a failed build, using the same reviewed settings.
+[GitHub build checks](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/#check-run).
+Pushes to `develop` trigger Builds after connection; feature branches and `main`
+do not build this Worker while preview builds are disabled.
+
+Deployment followed by failed health verification fails the command but does not
+roll back code. Inspect the staging Worker's Deployments tab and logs before
+retrying. Coordinate any manual recovery with Workers Builds to avoid overlapping
+deployments. Manual recovery is an operator action, not a second automated owner:
 
 ```sh
-gh workflow run deploy-staging.yml --repo lilaiireland-tw/relai-prototype --ref develop
-gh run list --repo lilaiireland-tw/relai-prototype --workflow deploy-staging.yml
-gh run view <run-id> --repo lilaiireland-tw/relai-prototype --log
-gh run rerun <run-id> --repo lilaiireland-tw/relai-prototype
-```
-
-For coordinated manual recovery, start from a clean, current `develop` checkout:
-
-```sh
+# From a clean, current develop checkout, with a local Cloudflare login:
 npm ci
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run verify:staging-build
-npx --no-install wrangler deploy --config dist/relai_prototype/wrangler.json --dry-run
-npm run deploy
+npm run build:staging:validated
+STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run deploy:staging:built
 ```
 
-`npm run deploy` always rebuilds staging and checks its generated binding before
-uploading. Do not use `--env production` on a staging build. Cloudflare environments
-are selected at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).
-
-Verify remotely in a POSIX shell:
-
-```sh
-STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run verify:staging-health
-```
-
-Or PowerShell:
+For read-only health verification in PowerShell:
 
 ```powershell
 $env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
 npm.cmd run verify:staging-health
 ```
 
-The health script accepts only a stable staging HTTPS workers.dev origin, rejects
-redirects, and requires HTTP 200, JSON content type and exactly `{"status":"ok"}`
-from `/relaiapp/api/v1/health`. It retries six times, with ten-second request
-timeouts and five-second delays. This checks runtime availability; it does not
-check D1 tables, authentication, Gemini or product acceptance.
+Environment selection happens at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).
+Deploy `dist/relai_prototype/wrangler.json` after verifying it. Do not attempt to
+retarget a staging build with `--env production`. No D1 migration is in this task.
 
-## Validation evidence (2026-09-28)
+## Validation evidence and remaining setup
 
-- Required lint, typecheck, tests (22 existing + 4 deployment tests) and staging
-  build passed. Deployment tests reject production configuration, custom routes,
-  invalid health responses and exhausted retries.
-- Generated staging binding verification and explicit generated-config Wrangler
-  dry-run passed with only `DB` -> `relai-staging-db`.
-- Generated staging types confirmed `DB: D1Database` in a temporary file.
-- Local Cloudflare preview routing checks passed all five checks. The sandbox
-  initially blocked Wrangler's local registry; rerunning with registry access
-  passed. No routing code change was needed.
-- `deploy-staging.yml` passed actionlint 1.7.12 (shellcheck not installed).
-- Bootstrap used a separate detached checkout of latest `origin/develop`, commit
-  `536ba8d`, with locked dependencies. Wrangler 4.142.0 uploaded only
-  `relai-prototype-staging`, reporting `DB` -> `relai-staging-db`.
-- Bootstrap version: `a8fa280b-ef95-4f1f-839e-7eb295b2c648`.
-- Live health returned HTTP 200 and `{"status":"ok"}`; `/relaiapp/` and its emitted
-  JavaScript asset returned HTTP 200 with the expected content types.
+- Staging safety and health tests cover wrong Worker/D1/route settings, invalid
+  health responses and exhausted retries; they need no remote credentials.
+- The original bootstrap remains valid: a separate checkout of latest
+  `origin/develop` at `536ba8d` deployed using Wrangler 4.142.0 and only
+  `DB` → `relai-staging-db` on 2026-09-28.
+- Bootstrap version: `a8fa280b-ef95-4f1f-839e-7eb295b2c648`. Live health returned
+  HTTP 200 with `{"status":"ok"}`; the app and its JavaScript asset returned HTTP
+  200 with the expected content types. This deployment is not undone.
+- Review revision removes the Actions deployer and its GitHub-specific output
+  hooks; CI remains unchanged. `npm run build:staging:validated` passed lint,
+  typecheck, 22 existing tests, four deployment tests, staging build and generated
+  binding verification. Explicit generated-config dry-run listed only
+  `DB` → `relai-staging-db`; the revised live health script passed.
 
-No production Worker, custom route, D1 schema/data or Cloudflare resource deletion
-was involved. Product acceptance and merging remain with the designated reviewers
-and Product Owner. The automation itself still needs its first post-merge run.
+The Product Owner still needs to authorize/connect the GitHub App in Cloudflare
+and complete the first Workers Builds run after merge. Local packaging and the
+existing live smoke deployment do not prove that the Dashboard connection works.
