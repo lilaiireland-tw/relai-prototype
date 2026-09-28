@@ -4,6 +4,7 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-09-27",
   "assets": {
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/relaiapp/api/v1", "/relaiapp/api/v1/*"]
   }
 }

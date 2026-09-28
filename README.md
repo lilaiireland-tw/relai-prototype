@@ -716,6 +716,18 @@ npx wrangler secret put AUTH_PEPPER
 
 ## 13. Local development
 
+### Current Worker API skeleton (Issue #11)
+
+The root Vite app and Hono API share one Cloudflare Worker. Run `npm run dev`
+and request `GET /relaiapp/api/v1/health` to receive HTTP 200 with
+`{"status":"ok"}`. This endpoint checks runtime availability only.
+
+API routing is grouped in `src/worker/routes/api.ts`. Wrangler runs the Worker
+first for `/relaiapp/api/v1` and `/relaiapp/api/v1/*`, including browser navigation
+requests, while other paths retain static asset / SPA handling. Unknown API
+routes return JSON 404 with `error.code = NOT_FOUND`; unhandled API errors return
+JSON 500 with `error.code = INTERNAL_SERVER_ERROR` and a fixed safe message.
+
 完成遷移後至少提供：
 
 ```bash
