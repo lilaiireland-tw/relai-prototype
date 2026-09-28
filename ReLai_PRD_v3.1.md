@@ -1307,6 +1307,20 @@ infra/supabase/
 
 # 三十五、Cloudflare bindings
 
+## D1 environment isolation (Issue #14)
+
+`develop` / `staging` uses `DB` bound only to `relai-staging-db`.
+`main` / `production` uses `DB` bound only to `relai-prod-db`.
+These are physically separate D1 resources with distinct IDs recorded only in
+server-side `wrangler.jsonc`. The default environment is staging; named bindings
+are explicit. Local development uses local D1 simulation.
+
+Select staging with `npm run dev` / `npm run build` / `npm run deploy`.
+Production builds/deploys from `main` use `npm run build:production` /
+`npm run deploy:production`. Environment selection happens at Vite build time.
+See [D1 environments](docs/d1-environments.md) for exact commands and safe checks.
+Issue #14 creates no application tables, migrations, authentication, or seed data.
+
 ```text
 DB
 GEMINI_API_KEY
@@ -1528,7 +1542,7 @@ ReLai v1 的工程方向可以濃縮成：
 ```text
 一個 React App
 一個 Cloudflare Worker
-一個 D1 Database
+每個環境一個 D1 Database（staging / production 實體隔離）
 一個 Gemini integration
 少於 10 個 Closed Beta 使用者
 沒有 public signup

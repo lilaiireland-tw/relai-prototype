@@ -1,10 +1,41 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "relai-prototype",
+  "name": "relai-prototype-staging",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-09-27",
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/relaiapp/api", "/relaiapp/api/*"]
+  },
+  // The default is staging so unqualified local/build commands cannot use production.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "relai-staging-db",
+      "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da"
+    }
+  ],
+  // Bindings are non-inheritable: keep each environment explicit.
+  "env": {
+    "staging": {
+      "name": "relai-prototype-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "relai-staging-db",
+          "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da"
+        }
+      ]
+    },
+    "production": {
+      "name": "relai-prototype",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "relai-prod-db",
+          "database_id": "73e85c43-fe58-4357-8196-e68c7dda00ee"
+        }
+      ]
+    }
   }
 }

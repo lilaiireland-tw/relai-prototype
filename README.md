@@ -358,23 +358,10 @@ migrations/
 
 修改。
 
-建立 migration：
-
-```bash
-npx wrangler d1 migrations create relai-prototype-db <migration_name>
-```
-
-本機套用：
-
-```bash
-npx wrangler d1 migrations apply relai-prototype-db --local
-```
-
-Production：
-
-```bash
-npx wrangler d1 migrations apply relai-prototype-db --remote
-```
+Issue #14 provisions resources and bindings only; application migrations are a
+separate task. Use the mapping in [D1 environments](docs/d1-environments.md).
+The old `relai-prototype-db` examples are superseded by `relai-staging-db` and
+`relai-prod-db`. No schema, migration, or production seed is included here.
 
 每次 schema change：
 
@@ -679,38 +666,31 @@ GEMINI_MODEL    -> plain env var
 APP_ENV         -> plain env var
 ```
 
-概念範例：
+### Isolated D1 environments (Issue #14)
 
-```json
-{
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "relai-prototype",
-  "main": "src/worker/index.ts",
-  "compatibility_date": "2026-09-27",
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "relai-prototype-db",
-      "database_id": "<set-after-create>"
-    }
-  ],
-  "vars": {
-    "APP_ENV": "production",
-    "GEMINI_MODEL": "gemini-3.8-flash"
-  }
-}
-```
+| Git branch | Cloudflare environment | Worker | Binding | D1 resource |
+|---|---|---|---|---|
+| `develop` | `staging` | `relai-prototype-staging` | `DB` | `relai-staging-db` |
+| `main` | `production` | `relai-prototype` | `DB` | `relai-prod-db` |
 
-Secrets：
+[`wrangler.jsonc`](wrangler.jsonc) is the server-side source of database IDs.
+Its default binding is staging; both named environments have explicit bindings
+and distinct database IDs. Local D1 is simulated; no binding uses `remote: true`.
+`npm run dev`, `npm run build`, and `npm run deploy` explicitly select staging.
+For `main`, use `npm run build:production` / `npm run deploy:production`.
+These commands build the selected environment before deployment; Git branches do
+not automatically select a Wrangler environment. No deployment automation is added.
 
-```bash
-npx wrangler secret put GEMINI_API_KEY
-npx wrangler secret put AUTH_PEPPER
-```
+The Vite plugin selects Cloudflare environments at **dev/build time**. A later
+`wrangler deploy --env production` cannot turn a staging build into a production
+build. Vite config rejects a `CLOUDFLARE_ENV` that conflicts with the selected mode.
+`npm run verify:d1-config` checks Wrangler resolution and isolation without credentials
+or database access; it also runs as part of `npm test`.
+
+See [D1 environments](docs/d1-environments.md) for exact provisioning commands,
+read-only connectivity checks, validation evidence, and safety constraints.
+Secrets must remain Cloudflare Worker secrets or ignored local files; never put
+secret values or DB configuration in client code or `VITE_*` variables.
 
 ---
 
@@ -813,7 +793,7 @@ Static assets + API same origin
 Prototype 維持：
 
 - 單一 Worker
-- 單一 D1 database
+- 每個環境一個 D1 database，staging / production 實體隔離
 - 同 origin frontend + API
 
 不要先拆 microservices。
