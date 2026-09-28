@@ -679,7 +679,8 @@ and distinct database IDs. Local D1 is simulated; no binding uses `remote: true`
 `npm run dev`, `npm run build`, and `npm run deploy` explicitly select staging.
 For `main`, use `npm run build:production` / `npm run deploy:production`.
 These commands build the selected environment before deployment; Git branches do
-not automatically select a Wrangler environment. No deployment automation is added.
+not automatically select a Wrangler environment. Staging automation is described
+in [develop deployment](docs/develop-deployment.md); production remains manual.
 
 The Vite plugin selects Cloudflare environments at **dev/build time**. A later
 `wrangler deploy --env production` cannot turn a staging build into a production
@@ -777,6 +778,34 @@ migrations, or automatic merging. Deployment remains a separate process.
 ---
 
 ## 14. Deployment
+
+### Develop test deployment (Issue #15)
+
+Cloudflare Workers Builds / Git integration is the sole automated staging deployer.
+GitHub Actions remains the CI quality gate only, through the existing
+`.github/workflows/ci.yml`. Connect the existing `relai-prototype-staging` Worker
+to `lilaiireland-tw/relai-prototype`, select `develop` as its deployment branch,
+and disable preview builds. Cloudflare's branch setting may be labelled
+"Production branch"; for this staging Worker it must be `develop`, not `main`.
+
+Set the Cloudflare Build command to `npm run build:staging:validated` and Deploy
+command to `npm run deploy:staging:built`. These commands run quality checks, build
+staging, verify the generated binding, check packaging, deploy that exact build,
+and verify `/relaiapp/api/v1/health`. They are invoked by Workers Builds; there is
+no GitHub Actions deployment workflow.
+
+Test app: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>.
+The staging environment explicitly enables `workers_dev`, has no custom routes,
+and binds `DB` only to `relai-staging-db`. Cloudflare build history and GitHub's
+Cloudflare check run provide deployment status; health logs print the test URL.
+
+The first staging smoke deployment used latest `develop` at `536ba8d`. The Product
+Owner must connect the repository in Cloudflare after this PR is merged, using the
+exact Dashboard settings in [develop deployment](docs/develop-deployment.md).
+That guide records deployment ownership, retries and validation evidence.
+The Dashboard connection and first Workers Builds run remain pending.
+
+### Application deployment lifecycle
 
 ```text
 GitHub

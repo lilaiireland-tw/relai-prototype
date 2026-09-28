@@ -19,6 +19,8 @@
   "env": {
     "staging": {
       "name": "relai-prototype-staging",
+      "workers_dev": true,
+      "routes": [],
       "d1_databases": [
         {
           "binding": "DB",

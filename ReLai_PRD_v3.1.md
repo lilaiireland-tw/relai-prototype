@@ -1321,6 +1321,15 @@ Production builds/deploys from `main` use `npm run build:production` /
 See [D1 environments](docs/d1-environments.md) for exact commands and safe checks.
 Issue #14 creates no application tables, migrations, authentication, or seed data.
 
+Issue #15 assigns staging deployment ownership to Cloudflare Workers Builds / Git
+integration. GitHub Actions remains CI quality-gate only. Connect the staging Worker
+to `develop` and disable preview builds; its build/deploy commands run validation,
+check generated staging bindings and verify health after deployment. The stable
+test app is <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>.
+See [develop deployment](docs/develop-deployment.md) for Product Owner Dashboard
+connection steps and validation evidence. The connection and first automated build
+are pending; production deployment and promotion are separate.
+
 ```text
 DB
 GEMINI_API_KEY
