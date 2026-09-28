@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { log } from 'node:console'
+import { existsSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import { unstable_readConfig as readConfig } from 'wrangler'
 
 // Resolve the source configuration explicitly, never the previous Vite build.
@@ -11,6 +13,9 @@ const binding = (config, expectedName) => {
   assert.equal(db.database_name, expectedName)
   assert.match(db.database_id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i)
   assert.notEqual(db.remote, true, 'Local development must use local D1 simulation')
+  assert.equal(db.migrations_dir, 'migrations', 'All D1 environments must use root migrations')
+  assert.equal(resolvePath(config.configPath, '..', db.migrations_dir), resolvePath('migrations'))
+  assert.ok(existsSync('migrations/README.md'), 'The migration source-of-truth directory must be tracked')
   return db.database_id
 }
 

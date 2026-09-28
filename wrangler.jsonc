@@ -12,7 +12,8 @@
     {
       "binding": "DB",
       "database_name": "relai-staging-db",
-      "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da"
+      "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da",
+      "migrations_dir": "migrations"
     }
   ],
   // Bindings are non-inheritable: keep each environment explicit.
@@ -25,7 +26,8 @@
         {
           "binding": "DB",
           "database_name": "relai-staging-db",
-          "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da"
+          "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da",
+          "migrations_dir": "migrations"
         }
       ]
     },
@@ -35,7 +37,8 @@
         {
           "binding": "DB",
           "database_name": "relai-prod-db",
-          "database_id": "73e85c43-fe58-4357-8196-e68c7dda00ee"
+          "database_id": "73e85c43-fe58-4357-8196-e68c7dda00ee",
+          "migrations_dir": "migrations"
         }
       ]
     }

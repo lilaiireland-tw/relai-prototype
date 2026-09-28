@@ -358,10 +358,31 @@ migrations/
 
 修改。
 
-Issue #14 provisions resources and bindings only; application migrations are a
-separate task. Use the mapping in [D1 environments](docs/d1-environments.md).
-The old `relai-prototype-db` examples are superseded by `relai-staging-db` and
-`relai-prod-db`. No schema, migration, or production seed is included here.
+Repository-root [`/migrations`](migrations/README.md) is the only v1 D1 schema
+source of truth. Issue #22 establishes this workflow without SQL or application
+tables. Legacy Supabase/Alembic migrations are historical references only.
+Keep committed/applied migrations append-only; correct them with new SQL files.
+See [D1 migration workflow](docs/d1-migrations.md) for exact commands and safety
+rules and [D1 environments](docs/d1-environments.md) for database mappings.
+
+From the repository root, for a future assigned schema task:
+
+```sh
+npm run db:migrations:create -- describe_change
+# Edit/review SQL, then validate locally:
+npm run db:migrations:list:local
+npm run db:migrations:apply:local
+# After local checks and review, an operator explicitly targets relai-staging-db:
+npm run db:migrations:list:staging
+npm run db:migrations:apply:staging
+```
+
+Local scripts use `--local`; staging scripts use `--remote`. All select
+`--config wrangler.jsonc --env staging` and `relai-staging-db` explicitly.
+Production migration requires an approved manual release action from `main`,
+using `relai-prod-db --config wrangler.jsonc --env production --remote` as shown
+in the runbook. No production migration script or automatic migration is part
+of GitHub Actions, Cloudflare staging CD, or ordinary develop deployment.
 
 每次 schema change：
 
@@ -369,7 +390,7 @@ The old `relai-prototype-db` examples are superseded by `relai-staging-db` and
 2. local apply
 3. local smoke test
 4. commit migration
-5. deploy 前 remote apply
+5. deploy 前由 operator 明確執行 staging migration；production 僅限核准的 manual release
 6. 不修改 production 已套用的 migration
 
 ---
@@ -812,12 +833,15 @@ GitHub
   ↓
 tests / typecheck / build
   ↓
-D1 remote migrations
+D1 migration (separate explicit operator step when schema changes)
   ↓
 Cloudflare Workers deploy
   ↓
 Static assets + API same origin
 ```
+
+The migration step above is a release coordination step, not a CI/CD command.
+GitHub Actions and Cloudflare staging CD never apply migrations automatically.
 
 Prototype 維持：
 
