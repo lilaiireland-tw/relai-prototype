@@ -167,3 +167,18 @@ This test is an explicit operator command, outside `npm test`, GitHub Actions,
 Cloudflare staging CD and deployment scripts. Neither remote database is accessed.
 No remote migration was applied for Issue #24; normal migration safety rules still
 apply to any future separately authorized release.
+
+## Initial staging application (Issue #25)
+
+The reviewed `0001_initial_core_schema.sql` was applied to `relai-staging-db`
+on 2026-09-28. See [exact commands and verification evidence](staging-d1-schema-25.md).
+Use the explicit read-only verifier after authenticating and selecting the
+documented ReLai account with `CLOUDFLARE_ACCOUNT_ID`:
+
+```sh
+npm run verify:d1-schema:staging
+```
+
+It checks remote identity, active staging Worker binding, exact PRD schema,
+required indexes/unique constraints, empty application tables and committed
+migration history. It never applies migrations and is not part of CI/CD.
