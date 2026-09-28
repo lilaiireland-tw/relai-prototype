@@ -679,7 +679,8 @@ and distinct database IDs. Local D1 is simulated; no binding uses `remote: true`
 `npm run dev`, `npm run build`, and `npm run deploy` explicitly select staging.
 For `main`, use `npm run build:production` / `npm run deploy:production`.
 These commands build the selected environment before deployment; Git branches do
-not automatically select a Wrangler environment. No deployment automation is added.
+not automatically select a Wrangler environment. Staging automation is described
+in [develop deployment](docs/develop-deployment.md); production remains manual.
 
 The Vite plugin selects Cloudflare environments at **dev/build time**. A later
 `wrangler deploy --env production` cannot turn a staging build into a production
@@ -777,6 +778,28 @@ migrations, or automatic merging. Deployment remains a separate process.
 ---
 
 ## 14. Deployment
+
+### Develop test deployment (Issue #15)
+
+GitHub Actions owns staging deployment through
+`.github/workflows/deploy-staging.yml`. Pushes to `develop` (including merged PRs)
+run validation, build staging, check the generated Worker/D1 configuration, deploy
+`relai-prototype-staging`, and verify `/relaiapp/api/v1/health`. Manual dispatch is
+allowed only on `develop`; `main`, feature branches and PR events cannot deploy
+through this workflow. Concurrent staging deployments are serialized.
+
+Test app: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>.
+The staging environment explicitly enables `workers_dev`, has no custom routes,
+and binds `DB` only to `relai-staging-db`. Actions logs, deployment status and a
+successful run summary provide the source commit and test/health URLs.
+
+Do not connect Cloudflare Workers Builds to this staging Worker while Actions owns
+deployment. The first staging smoke deployment used latest `develop` at `536ba8d`;
+automation requires the admin setup in [develop deployment](docs/develop-deployment.md).
+That guide records the missing CI credentials, deployment ownership, exact retry
+commands and validation evidence. No production deployment or migration is added.
+
+### Application deployment lifecycle
 
 ```text
 GitHub

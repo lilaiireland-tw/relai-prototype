@@ -8,12 +8,14 @@
     "build": "vite build --mode staging",
     "build:production": "vite build --mode production",
     "preview": "npm run build && vite preview",
-    "lint": "eslint src scripts/routing.test.mjs scripts/verify-d1-config.mjs vite.config.ts vitest.config.ts eslint.config.js",
+    "lint": "eslint src scripts/*.mjs vite.config.ts vitest.config.ts eslint.config.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && npm run verify:d1-config",
+    "test": "vitest run && node --test scripts/deployment.test.mjs && npm run verify:d1-config",
     "test:routing": "npm run build && node --test scripts/routing.test.mjs",
     "verify:d1-config": "node scripts/verify-d1-config.mjs",
-    "deploy": "npm run build && wrangler deploy",
+    "verify:staging-build": "node scripts/verify-staging-build.mjs",
+    "verify:staging-health": "node scripts/verify-staging-health.mjs",
+    "deploy": "npm run build && npm run verify:staging-build && wrangler deploy --config dist/relai_prototype/wrangler.json",
     "deploy:production": "npm run build:production && wrangler deploy"
   },
   "dependencies": {

@@ -1,0 +1,83 @@
+name: Deploy staging
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One writer to the stable staging Worker; do not interrupt an in-flight deploy.
+concurrency:
+  group: relai-staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy develop
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging
+      url: ${{ steps.health.outputs.app_url }}
+
+    steps:
+      - name: Check out triggering develop commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Check staging deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing staging CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo 'Missing staging CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build staging
+        run: npm run build
+
+      - name: Verify generated staging deployment configuration
+        run: npm run verify:staging-build
+
+      - name: Check deployment packaging
+        run: npx --no-install wrangler deploy --config dist/relai_prototype/wrangler.json --dry-run
+
+      - name: Deploy staging Worker
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Deploy exactly the flattened config that was built and verified above.
+          command: deploy --config dist/relai_prototype/wrangler.json
+
+      - name: Verify deployed health and publish test URL
+        id: health
+        env:
+          STAGING_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: npm run verify:staging-health
