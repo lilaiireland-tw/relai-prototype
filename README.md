@@ -359,8 +359,8 @@ migrations/
 修改。
 
 Repository-root [`/migrations`](migrations/README.md) is the only v1 D1 schema
-source of truth. Issue #22 establishes this workflow without SQL or application
-tables. Legacy Supabase/Alembic migrations are historical references only.
+source of truth. Issue #22 established the workflow; Issue #24 adds the first
+core schema migration. Legacy Supabase/Alembic migrations are historical references only.
 Keep committed/applied migrations append-only; correct them with new SQL files.
 See [D1 migration workflow](docs/d1-migrations.md) for exact commands and safety
 rules and [D1 environments](docs/d1-environments.md) for database mappings.
