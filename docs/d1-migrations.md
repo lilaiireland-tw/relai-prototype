@@ -2,7 +2,8 @@
 
 Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
-use `migrations_dir: "migrations"`. This task adds no SQL or application schema.
+use `migrations_dir: "migrations"`. Issue #22 established the workflow; Issue #24
+adds `0001_initial_core_schema.sql` for the seven PRD-defined core tables.
 Legacy Supabase/Alembic migrations remain historical references and untouched.
 
 Run all commands from the repository root with the installed Wrangler. Each
@@ -131,3 +132,38 @@ Keep logs in a writable temporary path with
 
 References: [Cloudflare D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/)
 and [Wrangler D1 commands](https://developers.cloudflare.com/workers/wrangler/commands/d1/).
+
+## Initial core schema validation (Issue #24)
+
+`0001_initial_core_schema.sql` creates only `users`, `sessions`, `source_items`,
+`flashcards`, `review_events`, `user_stats`, and `user_settings`, matching PRD
+section twelve exactly. It preserves PRD nullability, primary keys and defaults:
+`role = 'user'`, `is_active = 1`, `is_favorite = 0`, the four stats counters at
+`0`, and `daily_goal = 10`. No SQL timezone default is defined in the PRD.
+IDs/timestamps remain supplied by future application code.
+
+SQLite's unique indexes for `username`, `token_digest` and `client_event_id`
+satisfy their required lookup indexes. Seven explicit indexes cover the other
+PRD access patterns, including composite column order. No extra foreign keys,
+cascades, enum checks, triggers, timestamp generators or seed data are added.
+
+Run the explicit local integration check from the repository root:
+
+```sh
+npm run test:d1-schema
+```
+
+Each run allocates a fresh temporary persistence directory, proves the database
+has no application schema, and applies with the installed Wrangler using only
+`relai-staging-db --config wrangler.jsonc --env staging --local --persist-to`.
+It reads PRD table definitions independently and compares all columns, types,
+nullability, primary keys and defaults with `PRAGMA table_info`. Index metadata
+checks every required index and all three unique constraints. It verifies all
+seven tables are empty, migration history records one application, and a second
+apply/list reports no pending migrations with schema and history unchanged.
+Temporary state/logs are retained in the OS temp directory for inspection.
+
+This test is an explicit operator command, outside `npm test`, GitHub Actions,
+Cloudflare staging CD and deployment scripts. Neither remote database is accessed.
+No remote migration was applied for Issue #24; normal migration safety rules still
+apply to any future separately authorized release.
