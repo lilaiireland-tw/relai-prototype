@@ -15,6 +15,9 @@ Only users and sessions repositories are implemented in this task.
   UTC ISO-8601 text timestamps and explicit nullable fields. Callers supply IDs,
   normalized usernames, timestamps and already derived credentials. No password
   hashing, normalization or clock policy is implemented here.
+- `role` is unrestricted `string` with a create default of `'user'`;
+  `cohort_source` is `string | null`. These approved TEXT columns have no
+  persistence-level enums or additional schema constraints.
 - Lookups resolve to a typed row or `null`; inserts return the persisted row using
   `RETURNING`. Mutations return `{ changes }`, including zero for absent targets.
   Unique violations and D1 failures reject; do not turn errors into empty results.

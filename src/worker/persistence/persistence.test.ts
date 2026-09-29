@@ -53,11 +53,13 @@ describe('users and sessions persistence', () => {
     expect(await repositories.users.findByUsername('missing')).toBeNull()
   })
 
-  it('preserves explicit account values including inactive status', async () => {
-    expect(await repositories.users.create({ ...user, role: 'admin', is_active: 0,
-      cohort_source: 'internal_beta', last_login_at: at })).toMatchObject({
-      role: 'admin', is_active: 0, cohort_source: 'internal_beta', last_login_at: at,
-    })
+  it('round-trips unrestricted role and cohort TEXT values including inactive status', async () => {
+    const input = { ...user, role: 'custom-role', is_active: 0 as const,
+      cohort_source: 'custom-cohort', last_login_at: at }
+    const row = await repositories.users.create(input)
+    expect(row).toEqual(input)
+    expect(await repositories.users.findById(user.id)).toEqual(input)
+    expect(await repositories.users.findByUsername(user.username)).toEqual(input)
   })
 
   it('updates only approved login, credential and activation fields', async () => {

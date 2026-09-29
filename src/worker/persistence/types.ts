@@ -1,5 +1,3 @@
-export type UserRole = 'user' | 'admin'
-export type CohortSource = 'lilai_referral' | 'organic' | 'internal_beta'
 export type SqlBoolean = 0 | 1
 
 /** Worker-internal credential-bearing row; never serialize directly to clients. */
@@ -9,9 +7,9 @@ export interface UserRow {
   display_name: string
   password_salt: string
   password_digest: string
-  role: UserRole
+  role: string
   is_active: SqlBoolean
-  cohort_source: CohortSource | null
+  cohort_source: string | null
   created_at: string
   updated_at: string
   last_login_at: string | null
