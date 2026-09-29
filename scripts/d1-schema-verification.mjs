@@ -7,7 +7,7 @@ export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WH
 export function verifyCoreSchema(execute) {
   const query = (sql) => execute(sql).flatMap((response) => response.results)
   const schema = () => query(schemaSql)
-  const prd = readFileSync('ReLai_PRD_v3.1.md', 'utf8')
+  const prd = readFileSync('ReLai_PRD_v3.3.md', 'utf8')
   const section = prd.split('# 十二、Database Schema')[1].split('# 十三、Database')[0]
   const definitions = [...section.matchAll(/## `([^`]+)`\s+```text\s+([^`]+)```/g)]
   const tables = ['users', 'sessions', 'source_items', 'flashcards', 'review_events', 'user_stats', 'user_settings']
@@ -35,9 +35,6 @@ export function verifyCoreSchema(execute) {
       return { name, type, notnull: Number(line.includes('NOT NULL')),
         dflt_value: line.match(/DEFAULT (.+)$/)?.[1] ?? null, pk: Number(line.includes('PK')) }
     })
-    // Issue #47 appends this approved persistence field after the initial PRD schema.
-    if (table === 'users') expected.push({ name: 'must_change_password', type: 'INTEGER',
-      notnull: 1, dflt_value: '0', pk: 0 })
     const columns = query(`PRAGMA table_info('${table}')`).map(({ name, type, notnull, dflt_value, pk }) =>
       ({ name, type, notnull, dflt_value, pk }))
     assert.deepEqual(columns, expected, `${table}: exact PRD columns, types, nullability, defaults and primary keys`)
