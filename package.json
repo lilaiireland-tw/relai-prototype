@@ -14,6 +14,7 @@
     "test": "vitest run && node --test scripts/deployment.test.mjs && npm run verify:d1-config",
     "test:routing": "npm run build && node --test scripts/routing.test.mjs",
     "test:d1-schema": "node --test scripts/d1-schema.test.mjs",
+    "test:persistence": "vitest run src/worker/persistence/persistence.test.ts",
     "verify:d1-schema:staging": "node scripts/verify-staging-d1-schema.mjs",
     "verify:d1-config": "node scripts/verify-d1-config.mjs",
     "db:migrations:create": "wrangler d1 migrations create relai-staging-db --config wrangler.jsonc --env staging",
