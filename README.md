@@ -130,6 +130,15 @@ seven-day HttpOnly cookie policy. See [auth/session API](docs/auth-session-api.m
 for contracts, failure behavior and offline tests (`npm run test:auth-api`).
 Issue #42 connects the frontend through the centralized same-origin client and
 `AuthSessionProvider`, with protected routes and `/auth/me` bootstrap.
+For new beta accounts, an operator uses the interactive temporary-password flow
+in [account management](docs/admin-accounts.md), then privately hands the
+username and temporary password to the student. Login directs accounts with
+`must_change_password` to `/relaiapp/change-password`; the student enters the
+temporary password and chooses a replacement of at least eight characters.
+After the change, the app refreshes `/auth/me` and opens Home. Existing users can
+change their password from Settings. See [auth/session API](docs/auth-session-api.md)
+for the request contract and safe errors. The staging migration and real-account
+verification for Issue #50 await merge and Product Owner authorization.
 
 ### 產品規則
 

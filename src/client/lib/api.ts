@@ -1,7 +1,7 @@
 export const API_BASE_PATH = '/relaiapp/api/v1'
 
 // Only the existing Worker contract is exposed. Add paths when APIs exist.
-type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout'
+type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout' | '/auth/change-password'
 export function apiUrl(path: ApiPath): string {
   return `${API_BASE_PATH}${path}`
 }
@@ -10,6 +10,7 @@ export interface HealthResponse { status: 'ok' }
 export interface AuthUser { id: string; username: string; display_name: string; role: string; must_change_password: boolean }
 export interface AuthResponse { user: AuthUser }
 export interface LoginInput { username: string; password: string }
+export interface ChangePasswordInput { current_password: string; new_password: string }
 
 function decodeAuth(value: unknown): AuthResponse {
   if (typeof value !== 'object' || value === null || !('user' in value)) throw new Error('Invalid user')
@@ -36,7 +37,7 @@ export class ApiError extends Error {
 
 export function createApiClient(transport: typeof fetch = (...args) => globalThis.fetch(...args)) {
   const unauthorizedListeners = new Set<() => void>()
-  async function request(path: ApiPath, body?: LoginInput): Promise<Response> {
+  async function request(path: ApiPath, body?: LoginInput | ChangePasswordInput): Promise<Response> {
     let response: Response
     try {
       response = await transport(apiUrl(path), {
@@ -54,12 +55,13 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     }
     if (!response.ok) {
       // me is resolved by its caller, which can discard stale bootstrap responses.
-      if (response.status === 401 && path !== '/auth/login' && path !== '/auth/me') unauthorizedListeners.forEach(listener => listener())
+      // Incorrect current password also returns 401; it does not revoke the session.
+      if (response.status === 401 && path !== '/auth/login' && path !== '/auth/me' && path !== '/auth/change-password') unauthorizedListeners.forEach(listener => listener())
       throw new ApiError('http', '服務暫時無法使用，請稍後再試。', response.status)
     }
     return response
   }
-  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: LoginInput): Promise<T> {
+  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: LoginInput | ChangePasswordInput): Promise<T> {
     const response = await request(path, body)
     try {
       const value: unknown = await response.json()
@@ -75,6 +77,7 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
       return () => { unauthorizedListeners.delete(listener) }
     },
     login(input: LoginInput): Promise<AuthResponse> { return getJson('/auth/login', decodeAuth, input) },
+    changePassword(input: ChangePasswordInput): Promise<AuthResponse> { return getJson('/auth/change-password', decodeAuth, input) },
     me(): Promise<AuthResponse> { return getJson('/auth/me', decodeAuth) },
     async logout(): Promise<void> { await request('/auth/logout') },
     getHealth(): Promise<HealthResponse> {

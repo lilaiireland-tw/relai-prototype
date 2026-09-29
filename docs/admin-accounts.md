@@ -100,10 +100,13 @@ successful persistence. Handle that output privately; only salt and digest are
 stored in D1.
 
 Both creation flows set `must_change_password = true` (D1 integer `1`). The
-student must change the temporary password later. Issue #49 will add the
-self-service change-password API; it is not implemented by this provisioning
-task. Existing accounts are unchanged, and reset-password behavior remains as
-documented above. Staging remains the default; production still requires both
+student logs in at `/relaiapp/login` with the handed-off temporary password and
+is directed to `/relaiapp/change-password`. They enter the temporary password,
+then choose and confirm a new password of at least eight characters. After the
+change, the app refreshes account state and opens Home. The temporary password
+no longer works; the new password works on subsequent login. Existing accounts
+are unchanged, and reset-password behavior remains as documented above.
+Staging remains the default; production still requires both
 `--env production --confirm-production relai-prod-db`.
 
 ## Offline validation
@@ -113,3 +116,15 @@ the existing migration and repository SQL. They also run in `npm test`; no remot
 D1, OAuth credentials, real pepper or real beta accounts are needed. Ordinary
 module imports never open a platform proxy. Do not execute the CLI against real
 staging/production accounts during implementation or test validation.
+
+## Staging verification after authorization
+
+Do not apply the pending migration, create a real staging account or run this
+verification until the dependent PRs are merged and the Product Owner authorizes
+remote staging operations. Then follow Issue #50's sequence: apply the reviewed
+migration to `relai-staging-db`, create one dedicated temporary-password account
+through the interactive flow, login through the deployed UI, confirm forced
+redirection, change password, confirm Home and the cleared flag, logout, confirm
+old-password rejection and new-password login, check refresh/session behavior,
+and inspect browser storage and the HttpOnly cookie. Record only redacted
+PASS/FAIL evidence. Stop at the first staging blocker. Never target production.
