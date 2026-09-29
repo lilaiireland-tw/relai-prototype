@@ -16,6 +16,7 @@
     "test:d1-schema": "node --test scripts/d1-schema.test.mjs",
     "test:persistence": "vitest run src/worker/persistence/persistence.test.ts",
     "test:auth": "vitest run src/worker/auth/crypto.test.ts",
+    "test:auth-api": "vitest run src/worker/routes/auth.test.ts",
     "verify:d1-schema:staging": "node scripts/verify-staging-d1-schema.mjs",
     "verify:d1-config": "node scripts/verify-d1-config.mjs",
     "db:migrations:create": "wrangler d1 migrations create relai-staging-db --config wrangler.jsonc --env staging",
@@ -36,7 +37,8 @@
     "lucide-react": "^1.48.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router": "^8.4.0"
+    "react-router": "^8.4.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.61.0",

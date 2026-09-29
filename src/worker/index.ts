@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
 import { api } from './routes/api'
+import type { AuthEnv } from './auth/types'
 
 const apiBasePath = '/relaiapp/api/v1'
 const apiPrefix = '/relaiapp/api'
 
 export function createApp() {
-  const app = new Hono()
+  const app = new Hono<AuthEnv>()
 
   app.route(apiBasePath, api)
 
