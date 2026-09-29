@@ -18,6 +18,9 @@ export interface UserRow {
 export type CreateUserInput = Omit<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at'> &
   Partial<Pick<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at'>>
 
+/** Account-management projection: credentials never leave the repository. */
+export type AdminAccountRow = Omit<UserRow, 'password_salt' | 'password_digest'>
+
 declare const tokenDigestBrand: unique symbol
 export type TokenDigest = string & { readonly [tokenDigestBrand]: true }
 

@@ -737,6 +737,15 @@ before implementing later account reset/login logic. Run `npm run test:auth`
 for focused offline tests; these also run in `npm test`. This task adds no auth
 routes, cookies, account-management script, frontend auth or schema changes.
 
+### Admin account management (Issue #39)
+
+`scripts/manage-user.ts` supports closed-beta create, reset-password, disable and
+safe account listing through the existing Worker repositories and approved crypto.
+Run `npm run user:manage -- <command>` from the repository root; staging is the
+default and production requires an exact confirmation before D1 access. See the
+[operator runbook](docs/admin-accounts.md) for arguments, secret injection, password
+output and failure behavior. `npm run test:admin` runs focused offline tests.
+
 ### Current Worker API skeleton (Issue #11)
 
 The root Vite app and Hono API share one Cloudflare Worker. Run `npm run dev`

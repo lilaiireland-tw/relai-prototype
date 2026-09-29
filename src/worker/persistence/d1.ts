@@ -8,6 +8,7 @@ export type SqlValue = string | number | null
 export interface PersistenceStatement {
   bind(...values: SqlValue[]): PersistenceStatement
   first<T>(): Promise<T | null>
+  all<T>(): Promise<{ success: boolean; results: T[] }>
   run(): Promise<{ success: boolean; meta: { changes: number } }>
 }
 

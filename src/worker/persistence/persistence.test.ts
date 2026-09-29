@@ -12,6 +12,9 @@ function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
       async first<T>() {
         return (sqlite.prepare(sql).get(...values) as T | undefined) ?? null
       },
+      async all<T>() {
+        return { success: true, results: sqlite.prepare(sql).all(...values) as T[] }
+      },
       async run() {
         const result = sqlite.prepare(sql).run(...values)
         return { success: true, meta: { changes: Number(result.changes) } }
@@ -150,7 +153,7 @@ describe('users and sessions persistence', () => {
 
 describe('shared D1 result behavior', () => {
   function fake(first: PersistenceStatement['first'], run: PersistenceStatement['run']): PersistenceStatement {
-    return { bind() { return this }, first, run }
+    return { bind() { return this }, first, run, async all() { return { success: false, results: [] } } }
   }
 
   it('rejects a missing insert result and unsuccessful mutation', async () => {

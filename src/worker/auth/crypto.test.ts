@@ -157,10 +157,11 @@ describe('opaque sessions', () => {
     const prepare = vi.fn(() => ({
       bind(...values: (string | number | null)[]) {
         bind(...values)
-        return { bind: this.bind, async first<T>() { return { ...session, last_seen_at: null } as T },
+        return { bind: this.bind, async all<T>() { return { success: true, results: [] as T[] } }, async first<T>() { return { ...session, last_seen_at: null } as T },
           async run() { return { success: true, meta: { changes: 1 } } } }
       },
       async first<T>(): Promise<T | null> { return null },
+      async all<T>() { return { success: true, results: [] as T[] } },
       async run() { return { success: true, meta: { changes: 0 } } },
     }))
     const repository = createSessionsRepository({ prepare })
