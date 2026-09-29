@@ -22,10 +22,23 @@ describe('same-origin client API', () => {
   it('projects only safe user fields and rejects invalid auth responses', async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ user: { ...user, password: 'private', token: 'private' } }))
     await expect(createApiClient(transport).me()).resolves.toEqual({ user })
-    for (const value of [null, {}, { user: null }, { user: { ...user, id: 42 } }, { user: { ...user, role: 'unknown' } }]) {
+    for (const value of [null, {}, { user: null }, { user: { ...user, id: 42 } }]) {
       transport.mockResolvedValue(Response.json(value))
       await expect(createApiClient(transport).me()).rejects.toMatchObject({ kind: 'invalid-response' })
     }
+  })
+  it('accepts other role strings from the Worker contract for login and me', async () => {
+    const safeUser = { ...user, role: 'beta_tester' }
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ user: safeUser }))
+    const client = createApiClient(transport)
+    await expect(client.login({ username: user.username, password: 'Secret' })).resolves.toEqual({ user: safeUser })
+    await expect(client.me()).resolves.toEqual({ user: safeUser })
+  })
+  it.each([undefined, null, 42, true, [], {}])('rejects a non-string role %j for login and me', async role => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ user: { ...user, role } }))
+    const client = createApiClient(transport)
+    await expect(client.login({ username: user.username, password: 'Secret' })).rejects.toMatchObject({ kind: 'invalid-response' })
+    await expect(client.me()).rejects.toMatchObject({ kind: 'invalid-response' })
   })
   it('notifies session expiry subscribers, excluding login errors and caller-managed me', async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response('private', { status: 401 }))

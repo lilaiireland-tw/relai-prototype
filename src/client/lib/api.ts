@@ -7,7 +7,7 @@ export function apiUrl(path: ApiPath): string {
 }
 
 export interface HealthResponse { status: 'ok' }
-export interface AuthUser { id: string; username: string; display_name: string; role: 'user' | 'admin' }
+export interface AuthUser { id: string; username: string; display_name: string; role: string }
 export interface AuthResponse { user: AuthUser }
 export interface LoginInput { username: string; password: string }
 
@@ -18,7 +18,7 @@ function decodeAuth(value: unknown): AuthResponse {
     !('id' in user) || typeof user.id !== 'string' ||
     !('username' in user) || typeof user.username !== 'string' ||
     !('display_name' in user) || typeof user.display_name !== 'string' ||
-    !('role' in user) || (user.role !== 'user' && user.role !== 'admin')) throw new Error('Invalid user')
+    !('role' in user) || typeof user.role !== 'string') throw new Error('Invalid user')
   return { user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role } }
 }
 export class ApiError extends Error {
