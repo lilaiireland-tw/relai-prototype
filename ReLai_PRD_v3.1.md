@@ -1,6 +1,6 @@
-# ReLai（哩來語感特訓）— 產品需求與架構綱要 PRD v3.1
+# ReLai（哩來語感特訓）— 產品需求與架構綱要 PRD v3.3
 
-**文件版本**：v3.1（Cloudflare Prototype 架構與現況同步版）
+**文件版本**：v3.3（Cloudflare Prototype 架構與現況同步版）
 
 **品牌歸屬**：哩來愛爾蘭（@lilaiireland）  
 **開發策略**：Vibe Coding / Codex Agent 輔助全端開發 / 敏捷開發  
@@ -244,7 +244,6 @@ ReLai 與哩來愛爾蘭的語校 / 打工度假 / 留學流程串聯。
 - 「7 天未複習」優先排序
 - Achievement badges
 - Error Log 快速模板
-- 管理員 password reset script
 - 基礎 learning stats
 
 ## P2 — Could Have
@@ -1329,7 +1328,7 @@ wrangler.jsonc
 
 兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql` 與 `0002_add_users_must_change_password.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
 
-`npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging；Production 由 `main` 使用 `npm run build:production`／`npm run deploy:production`。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
+`npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging。Production 從 `main` 走受保護的手動發布流程；目前不可將 `npm run deploy:production` 視為已驗證的 production 部署指令，因為它在 production 建置後執行未指定設定檔的 `wrangler deploy`，而根目錄設定預設指向 staging。首次 production 發布前，須另行驗證產生的設定檔、Worker／D1 綁定與確切部署指令，並取得發布授權。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
 
 對已產生的 staging `dist/relai_prototype/wrangler.json` 執行獨立 Wrangler 部署時，不得繼承 `CLOUDFLARE_ENV=staging`，否則可能產生重複的 `-staging` 後綴；部署前的檢查會拒絕此設定。先前誤建的 `relai-prototype-staging-staging` 已由產品負責人手動移除，預期的 staging Worker 是 `relai-prototype-staging`。
 
@@ -1559,6 +1558,6 @@ ReLai v1 的工程方向可以濃縮成：
 
 ---
 
-**文件版本：PRD v3.1 — Cloudflare Prototype 架構與現況同步版**
+**文件版本：PRD v3.3 — Cloudflare Prototype 架構與現況同步版**
 
 **最後更新：2026-09-29**
