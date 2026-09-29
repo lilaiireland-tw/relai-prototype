@@ -14,7 +14,7 @@
     "test": "vitest run && node --test scripts/deployment.test.mjs && npm run verify:d1-config",
     "test:routing": "npm run build && node --test scripts/routing.test.mjs",
     "test:d1-schema": "node --test scripts/d1-schema.test.mjs",
-    "test:persistence": "vitest run src/worker/persistence/persistence.test.ts",
+    "test:persistence": "vitest run src/worker/persistence/persistence.test.ts src/worker/persistence/product-persistence.test.ts",
     "test:auth": "vitest run src/worker/auth/crypto.test.ts",
     "test:auth-api": "vitest run src/worker/routes/auth.test.ts",
     "verify:d1-schema:staging": "node scripts/verify-staging-d1-schema.mjs",

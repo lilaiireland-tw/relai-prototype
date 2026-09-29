@@ -50,3 +50,60 @@ export interface SessionRow {
 
 export type CreateSessionInput = Omit<SessionRow, 'last_seen_at'> &
   Partial<Pick<SessionRow, 'last_seen_at'>>
+
+export type CardType = 'vocabulary' | 'error_log'
+
+export interface FlashcardRow {
+  id: string
+  user_id: string
+  source_item_id: string | null
+  card_type: CardType
+  front_content: string
+  back_content: string
+  part_of_speech: string | null
+  zh_tw_definition: string | null
+  explanation: string | null
+  irish_usage: string | null
+  source: string | null
+  is_favorite: boolean
+  last_reviewed_at: string | null
+  next_review_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type EditableFlashcard = Pick<FlashcardRow, 'card_type' | 'front_content' | 'back_content' |
+  'part_of_speech' | 'zh_tw_definition' | 'explanation' | 'irish_usage' | 'source'>
+
+export interface ReviewEventRow {
+  id: string
+  client_event_id: string
+  user_id: string
+  card_id: string
+  review_result: string
+  reviewed_at: string
+  created_at: string
+}
+
+export type CreateReviewEventInput = Omit<ReviewEventRow, 'user_id'>
+
+export interface UserStatsRow {
+  user_id: string
+  streak_days: number
+  longest_streak: number
+  total_cards_created: number
+  total_reviews: number
+  last_active_date: string | null
+  updated_at: string
+}
+
+export type StatsCounters = Pick<UserStatsRow, 'streak_days' | 'longest_streak' |
+  'total_cards_created' | 'total_reviews' | 'last_active_date'>
+
+export interface UserSettingsRow {
+  user_id: string
+  daily_goal: number
+  timezone: string
+  created_at: string
+  updated_at: string
+}
