@@ -1,20 +1,28 @@
 # ReLai（哩來語感特訓）— 產品需求與架構綱要 PRD v3.1
 
-**文件版本**：v3.2（Cloudflare Prototype 架構修訂版）  
+**文件版本**：v3.1（Cloudflare Prototype 架構與現況同步版）
+
 **品牌歸屬**：哩來愛爾蘭（@lilaiireland）  
 **開發策略**：Vibe Coding / Codex Agent 輔助全端開發 / 敏捷開發  
-**最後更新**：2026-09-27  
-**文件角色**：產品需求、功能優先級與驗收條件的最高指導文件。工程 implementation 必須同時遵循 root `README.md`。
+**最後更新**：2026-09-29
 
-> **架構決策已更新**
+**文件角色**：產品需求、功能優先級與驗收條件的最高指導文件。工程實作與部署現況同時遵循根目錄的 `README.md`。
+
+> **v1 架構決策**
 >
 > v1 Closed Beta 採用：
 >
-> `React + Vite + Cloudflare Workers + Hono + Cloudflare D1 + Gemini API`
+> `React + Vite + Cloudflare Workers + Hono + Cloudflare D1`；Gemini API 是後續 AI 擷取階段的預定供應商。
 >
-> 不再採用舊文件中的：
+> 不採用舊方案中的：
 >
 > `Next.js Server Actions + FastAPI + PostgreSQL + Supabase + Vercel`
+
+## 本文件與目前實作的邊界
+
+本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema 與使用者／工作階段資料存取、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。現有 Worker API 僅提供健康檢查與驗證；學習畫面仍使用模擬資料或預留畫面。卡片／複習／統計／設定的真實資料持久化、Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署與 migration 狀態須由操作人員查核，不由本文件推定。
+
+目前的入口為 `/relaiapp/`，API 命名空間為 `/relaiapp/api/v1/*`。已實作的路由、指令、環境綁定與部署安全規則以根目錄 [README](README.md) 及其操作手冊為準。
 
 ---
 
@@ -208,6 +216,8 @@ ReLai 與哩來愛爾蘭的語校 / 打工度假 / 留學流程串聯。
 
 - 管理員預建帳號
 - Username/password 登入
+- 暫時密碼與首次登入強制變更密碼
+- 已登入使用者自行變更密碼
 - 不提供註冊
 - 文字輸入 → AI cards
 - 圖片輸入 → multimodal AI cards
@@ -251,7 +261,6 @@ ReLai 與哩來愛爾蘭的語校 / 打工度假 / 留學流程串聯。
 - Apple login
 - Email verification
 - Forgot-password email flow
-- User self-service password change
 - Payment
 - R2 image library
 - FSRS
@@ -268,7 +277,7 @@ ReLai 與哩來愛爾蘭的語校 / 打工度假 / 留學流程串聯。
                            ▲
                            │
                            │
-Browser / PWA ─────► Cloudflare Worker
+Browser / React + Vite SPA ─────► Cloudflare Worker
                            │
                  ┌─────────┴─────────┐
                  │                   │
@@ -283,8 +292,8 @@ Browser / PWA ─────► Cloudflare Worker
 Frontend 與 API 使用相同 domain：
 
 ```text
-https://relai.example.com/
-https://relai.example.com/api/v1/*
+https://<Worker 網域>/relaiapp/
+https://<Worker 網域>/relaiapp/api/v1/*
 ```
 
 優點：
@@ -331,7 +340,7 @@ Supabase RLS
 Vercel
 ```
 
-現有 Next.js UI 是 migration source，不是未來 runtime constraint。
+目前執行環境是根目錄的 React／Vite 專案，不使用 Next.js runtime。
 
 ---
 
@@ -348,13 +357,15 @@ ReLai Admin
    ↓
 建立帳號
    ↓
-發 username + random password
+發 username + 暫時密碼（互動輸入或系統產生）
    ↓
-User /login
+使用者進入 /relaiapp/login
    ↓
 Worker credential verification
    ↓
-Session cookie
+七天有效的 HttpOnly session cookie
+   ↓
+若 must_change_password 為 true，先進入 /relaiapp/change-password
 ```
 
 ### User Story — Login
@@ -363,7 +374,7 @@ Session cookie
 
 身份：Closed Beta 使用者  
 行動：輸入 ReLai 提供的 username + password  
-結果：登入並進入 `/home`
+結果：一般帳號進入 `/relaiapp/home`；需要變更密碼的帳號先進入 `/relaiapp/change-password`
 
 驗收：
 
@@ -372,7 +383,8 @@ Session cookie
 - disabled user 不得登入
 - successful login 更新 `last_login_at`
 - 建立 HttpOnly session cookie
-- 登入後 `/api/v1/auth/me` 可取得目前 user profile
+- 登入後 `/relaiapp/api/v1/auth/me` 可取得目前使用者的安全資料
+- `must_change_password` 為 true 時，完成密碼變更前不能進入產品頁面
 
 ### Logout
 
@@ -380,7 +392,7 @@ Session cookie
 
 - 刪除 server-side session
 - 清除 cookie
-- redirect `/login`
+- 導回 `/relaiapp/login`
 
 ### 帳號建立
 
@@ -392,15 +404,16 @@ Session cookie
 scripts/manage-user.ts
 ```
 
-或等價的 admin-only local script。
-
-例如：
+實際入口：
 
 ```bash
-npm run user:create
-npm run user:reset-password
-npm run user:disable
+npm run user:manage -- create --interactive --env staging
+npm run user:manage -- reset-password --username alex
+npm run user:manage -- disable --username alex
+npm run user:manage -- list
 ```
+
+管理員互動建立帳號時輸入並私下交付暫時密碼；非互動建立及重設密碼仍可由系統產生隨機密碼。新帳號須變更密碼。Production 操作另需明確指定 `--env production --confirm-production relai-prod-db`，詳見[帳號管理手冊](docs/admin-accounts.md)。
 
 Production 不暴露 `/api/admin/create-user` 給一般 Internet client。
 
@@ -411,16 +424,18 @@ Production 不暴露 `/api/admin/create-user` 給一般 Internet client。
 因為 v1：
 
 - 使用者 <10
-- password 由系統發放
-- password 為高 entropy random secret
-- 沒有 user-chosen weak password
+- 帳號由管理員發放，不提供公開註冊
+- 互動建立時可由管理員設定至少八個字元的暫時密碼，首次登入須變更
+- 非互動建立與重設密碼可由系統產生隨機密碼
 
-Prototype credential 可使用 Worker Web Crypto + server-side pepper。
+目前的封閉測試 credential 使用 Worker Web Crypto 與伺服器端 pepper。這是小規模封閉測試方案，不應直接視為公開註冊服務的正式密碼架構。
 
 D1 不保存：
 
 - plaintext password
 - raw session token
+
+D1 僅保存密碼鹽值／摘要與 session token 摘要；原始密碼及 token 不寫入瀏覽器的 `localStorage` 或 `sessionStorage`。Session cookie 有效期固定七天，在 HTTPS 下設定 `Secure`。
 
 Worker Secret：
 
@@ -450,6 +465,7 @@ cohort_source TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 last_login_at TEXT
+must_change_password INTEGER NOT NULL DEFAULT 0
 ```
 
 ## `sessions`
@@ -796,8 +812,10 @@ HEIC 在 client 端轉換後再送 server。
 Prefix：
 
 ```text
-/api/v1
+/relaiapp/api/v1
 ```
+
+目前已實作 `GET /health` 與下列 Auth 端點；Ingestion、Cards、Reviews、Stats、Settings 是後續產品 API 規格，尚未實作。
 
 ## Auth
 
@@ -805,6 +823,7 @@ Prefix：
 POST /auth/login
 POST /auth/logout
 GET  /auth/me
+POST /auth/change-password
 ```
 
 ## Ingestion
@@ -1037,7 +1056,7 @@ client_event_id idempotency
 
 # 二十六、Onboarding
 
-Closed Beta 不需要 signup onboarding。
+Closed Beta 不需要 signup onboarding。目前已實作首次登入強制變更密碼；以下學習功能導覽屬後續產品體驗規格，尚未實作。
 
 首次登入：
 
@@ -1056,13 +1075,19 @@ Closed Beta 不需要 signup onboarding。
 
 # 二十七、Pages
 
+目前的前端路由皆位於 `/relaiapp/` 之下：
+
 ```text
-/login
-/home
-/cards
-/stats
-/settings
+/relaiapp/login
+/relaiapp/change-password
+/relaiapp/home
+/relaiapp/cards
+/relaiapp/error-log
+/relaiapp/stats
+/relaiapp/settings
 ```
+
+目前卡片與 Error Log 畫面使用模擬資料；統計與設定的產品功能仍是預留畫面，但設定頁面可進入已實作的變更密碼流程。
 
 Future：
 
@@ -1071,7 +1096,7 @@ Future：
 /subscription
 ```
 
-現有 prototype UI 應優先保留，不在 infrastructure migration 中大幅 redesign。
+後續功能開發應優先保留現有 prototype UI，不因資料來源變更而任意重新設計。
 
 ---
 
@@ -1272,13 +1297,12 @@ Codex 必須：
 
 ---
 
-# 三十四、Repository Target
+# 三十四、目前儲存庫結構
 
 ```text
 src/
 ├─ client/
-├─ worker/
-└─ shared/
+└─ worker/
 
 migrations/
 scripts/
@@ -1292,100 +1316,62 @@ vite.config.ts
 wrangler.jsonc
 ```
 
-Legacy：
-
-```text
-frontend-web/
-backend/
-database/
-infra/supabase/
-```
-
-遷移完成後移除。
+舊版 Next.js、FastAPI、PostgreSQL 與 Supabase 實作已自儲存庫移除。本段列出目前存在的主要目錄；細節見[儲存庫結構說明](docs/structure.md)。
 
 ---
 
-# 三十五、Cloudflare bindings
+# 三十五、Cloudflare 環境與綁定
 
-## D1 environment isolation (Issue #14)
+| 分支／環境 | Worker | D1 綁定 `DB` |
+|---|---|---|
+| `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
+| `main`／production | `relai-prototype` | `relai-prod-db` |
 
-`develop` / `staging` uses `DB` bound only to `relai-staging-db`.
-`main` / `production` uses `DB` bound only to `relai-prod-db`.
-These are physically separate D1 resources with distinct IDs recorded only in
-server-side `wrangler.jsonc`. The default environment is staging; named bindings
-are explicit. Local development uses local D1 simulation.
+兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql` 與 `0002_add_users_must_change_password.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
 
-Select staging with `npm run dev` / `npm run build` / `npm run deploy`.
-Production builds/deploys from `main` use `npm run build:production` /
-`npm run deploy:production`. Environment selection happens at Vite build time.
-See [D1 environments](docs/d1-environments.md) for exact commands and safe checks.
-Issue #14 creates no application tables, migrations, authentication, or seed data.
+`npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging；Production 由 `main` 使用 `npm run build:production`／`npm run deploy:production`。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
 
-Issue #15 assigns staging deployment ownership to Cloudflare Workers Builds / Git
-integration. GitHub Actions remains CI quality-gate only. Connect the staging Worker
-to `develop` and disable preview builds; its build/deploy commands run validation,
-check generated staging bindings and verify health after deployment. The stable
-test app is <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>.
-See [develop deployment](docs/develop-deployment.md) for Product Owner Dashboard
-connection steps and validation evidence. The connection and first automated build
-are pending; production deployment and promotion are separate.
+對已產生的 staging `dist/relai_prototype/wrangler.json` 執行獨立 Wrangler 部署時，不得繼承 `CLOUDFLARE_ENV=staging`，否則可能產生重複的 `-staging` 後綴；部署前的檢查會拒絕此設定。先前誤建的 `relai-prototype-staging-staging` 已由產品負責人手動移除，預期的 staging Worker 是 `relai-prototype-staging`。
 
-```text
-DB
-GEMINI_API_KEY
-AUTH_PEPPER
-GEMINI_MODEL
-APP_ENV
-```
-
-Secrets：
-
-```text
-GEMINI_API_KEY
-AUTH_PEPPER
-```
-
-不是 secrets：
-
-```text
-GEMINI_MODEL
-APP_ENV
-```
+目前驗證流程使用 `DB` 及伺服器端密鑰 `AUTH_PEPPER`。後續 Gemini 擷取功能使用的 `GEMINI_API_KEY` 也必須是 Worker secret；`GEMINI_MODEL` 等設定須待該階段實作時確認，不應推定目前已啟用。
 
 ---
 
 # 三十六、Development Flow
 
 ```text
-npm install
+npm ci
 npm run dev
 npm run lint
 npm run typecheck
 npm test
 npm run build
-npm run preview
-npm run deploy
+npm run test:routing
 ```
 
-D1：
+D1 migration 由操作人員依[流程手冊](docs/d1-migrations.md)明確執行，不屬於一般開發驗證或自動部署：
 
 ```text
-wrangler d1 migrations create
-wrangler d1 migrations apply --local
-wrangler d1 migrations apply --remote
+npm run db:migrations:list:local
+npm run db:migrations:apply:local
+npm run db:migrations:list:staging
+npm run db:migrations:apply:staging
 ```
+
+Staging 的遠端套用須先確認目標資料庫與待套用 SQL；production 另走受保護的手動發布流程。
 
 ---
 
 # 三十七、Implementation Roadmap
 
-## Phase 0 — Documentation
+以下狀態描述目前儲存庫的實作範圍；未開始的階段仍是產品規劃，不代表功能已上線。
 
-- README 更新
-- PRD 更新
-- legacy architecture 標示 deprecated
+## Phase 0 — Documentation（已完成）
 
-## Phase 1 — Runtime Migration
+- README 與 PRD 對齊目前架構
+- 舊架構實作已移除
+
+## Phase 1 — Runtime Migration（已完成）
 
 - Next UI → Vite React
 - Router
@@ -1398,18 +1384,18 @@ Exit criteria：
 ```text
 UI 看起來與 prototype 基本一致
 Cloudflare URL 可正常載入
-/api/v1/health 正常
+/relaiapp/api/v1/health 正常
 ```
 
-## Phase 2 — D1
+## Phase 2 — D1 基礎（已完成）
 
 - DB create
 - migrations
 - core tables
 - indexes
-- queries
+- users／sessions repository
 
-## Phase 3 — Auth
+## Phase 3 — Auth（已完成）
 
 - user management script
 - login
@@ -1417,7 +1403,13 @@ Cloudflare URL 可正常載入
 - logout
 - protected routes
 
-## Phase 4 — Real Data
+## Phase 3.5 — 密碼啟用流程（已完成）
+
+- 管理員互動建立暫時密碼
+- `must_change_password` 及首次登入強制變更
+- 已登入使用者自行變更密碼
+
+## Phase 4 — Real Data（下一階段，尚未開始）
 
 - cards API
 - settings
@@ -1425,7 +1417,7 @@ Cloudflare URL 可正常載入
 - stats
 - mock data replacement
 
-## Phase 5 — AI
+## Phase 5 — AI（尚未開始）
 
 - text ingestion
 - image ingestion
@@ -1434,7 +1426,7 @@ Cloudflare URL 可正常載入
 - retry
 - latency
 
-## Phase 6 — PWA
+## Phase 6 — PWA（尚未開始）
 
 - service worker
 - IndexedDB
@@ -1567,5 +1559,6 @@ ReLai v1 的工程方向可以濃縮成：
 
 ---
 
-**文件版本：PRD v3.1 — Cloudflare Prototype 架構修訂版**  
-**最後更新：2026-09-27**
+**文件版本：PRD v3.1 — Cloudflare Prototype 架構與現況同步版**
+
+**最後更新：2026-09-29**

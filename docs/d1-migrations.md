@@ -155,8 +155,8 @@ npm run test:d1-schema
 Each run allocates a fresh temporary persistence directory, proves the database
 has no application schema, and applies with the installed Wrangler using only
 `relai-staging-db --config wrangler.jsonc --env staging --local --persist-to`.
-It reads PRD table definitions independently, adds the Issue #47 approved
-`users.must_change_password INTEGER NOT NULL DEFAULT 0` extension, and compares all columns, types,
+It reads current PRD table definitions, including the Issue #47 approved
+`users.must_change_password INTEGER NOT NULL DEFAULT 0` column, and compares all columns, types,
 nullability, primary keys and defaults with `PRAGMA table_info`. Index metadata
 checks every required index and all three unique constraints. It verifies all
 seven tables are empty, migration history records each committed migration once, and a second

@@ -35,9 +35,6 @@ export function verifyCoreSchema(execute) {
       return { name, type, notnull: Number(line.includes('NOT NULL')),
         dflt_value: line.match(/DEFAULT (.+)$/)?.[1] ?? null, pk: Number(line.includes('PK')) }
     })
-    // Issue #47 appends this approved persistence field after the initial PRD schema.
-    if (table === 'users') expected.push({ name: 'must_change_password', type: 'INTEGER',
-      notnull: 1, dflt_value: '0', pk: 0 })
     const columns = query(`PRAGMA table_info('${table}')`).map(({ name, type, notnull, dflt_value, pk }) =>
       ({ name, type, notnull, dflt_value, pk }))
     assert.deepEqual(columns, expected, `${table}: exact PRD columns, types, nullability, defaults and primary keys`)
