@@ -726,6 +726,17 @@ inputs, result behavior, digest-only session access and ownership boundaries.
 Run `npm run test:persistence` for deterministic in-memory SQLite tests using
 the approved migration; these tests also run in `npm test` without remote D1 access.
 
+### Auth crypto primitives (Issue #37)
+
+`src/worker/auth/crypto.ts` provides Worker Web Crypto credential salt generation,
+versioned HMAC-SHA-256 password derivation/verification with server-side
+`AUTH_PEPPER`, and opaque session-token generation/SHA-256 digest derivation.
+Raw session transport material has a separate type from the existing stored
+`TokenDigest` boundary. See [the exact v1 encoding and contracts](docs/auth-crypto.md)
+before implementing later account reset/login logic. Run `npm run test:auth`
+for focused offline tests; these also run in `npm test`. This task adds no auth
+routes, cookies, account-management script, frontend auth or schema changes.
+
 ### Current Worker API skeleton (Issue #11)
 
 The root Vite app and Hono API share one Cloudflare Worker. Run `npm run dev`

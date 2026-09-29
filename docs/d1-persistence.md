@@ -30,6 +30,10 @@ Only users and sessions repositories are implemented in this task.
   gives it a branded type. Session create/lookup/revoke also validate at runtime.
   No persistence API takes a raw token or computes a digest. The upstream auth
   layer must derive the digest; format validation cannot prove its provenance.
+  Issue #37 now supplies that upstream derivation in `src/worker/auth/crypto.ts`:
+  `digestSessionToken` hashes raw transport text and returns this existing
+  `TokenDigest` type. See [auth crypto contracts](auth-crypto.md). Raw tokens
+  remain outside repository inputs; credentials contain only salt/digest fields.
 - Session lookup returns stored timing fields even for expired sessions. Auth
   decides expiry and activity policy; persistence does not renew expiry. Last-seen
   updates require both session ID and authenticated user ID. Digest lookup/revoke
