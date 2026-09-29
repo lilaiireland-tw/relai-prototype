@@ -738,14 +738,32 @@ requests, while other paths retain static asset / SPA handling. Unknown API
 routes return JSON 404 with `error.code = NOT_FOUND`; unhandled API errors return
 JSON 500 with `error.code = INTERNAL_SERVER_ERROR` and a fixed safe message.
 
-### Client routing and base path (Issue #12)
+### Client routing and base path (Issues #12 / #32)
 
-Open `/relaiapp/` when running `npm run dev` or `npm run preview`. React Router
-uses Vite's `/relaiapp/` base (without the trailing slash for its basename), with
-placeholders at `/relaiapp/login`, `/relaiapp/home`, `/relaiapp/cards`,
-`/relaiapp/stats`, and `/relaiapp/settings`. Both `/relaiapp` and `/relaiapp/`
-render the Home placeholder. The existing scaffold remains; legacy UI migration
-and authentication enforcement are separate tasks.
+Open `/relaiapp/` with `npm run dev` or `npm run preview`. Both `/relaiapp`
+and `/relaiapp/` render the migrated splash screen. React Router uses Vite's
+`/relaiapp/` base, with login, home, vocabulary cards and error log at `/login`,
+`/home`, `/cards` and `/error-log` beneath that basename. Legacy `/auth` (including
+old mode queries) redirects to login; `/flashcards` redirects to `/cards`.
+`/stats` and `/settings` remain future-feature placeholders.
+
+The username/password form accepts any nonempty demo values. Use dummy credentials;
+it is client-only UI state, not production authentication. Passwords and tokens are
+not stored. Reload clears the demo profile, while mock screens remain directly
+previewable. Logout returns to login. No public registration UI is provided.
+
+`src/client/services/data.ts` is the replaceable asynchronous client data adapter;
+components consume its PRD-shaped card, stats and settings contracts. Fixtures in
+`services/mock.ts` are derived from the legacy visual reference. Today's progress
+uses a daily review count, not lifetime reviews. Mock review navigation does not
+persist review events or change stats. Future same-origin Worker APIs can replace
+the adapter without porting the UI again. No real auth, cards, stats, settings,
+Gemini or browser D1 integration is included. `frontend-web` remains untouched.
+
+`npm test` covers direct client routes, navigation, demo login/logout, mock content,
+card flip/next, error log and registration absence. `npm run test:routing` verifies
+built SPA deep links/assets and that the API namespace continues returning JSON
+independently of SPA fallback.
 
 Cloudflare's `single-page-application` asset handling serves `index.html` for
 direct navigation or refresh of client routes. Vite emits asset URLs under
@@ -753,10 +771,6 @@ direct navigation or refresh of client routes. Vite emits asset URLs under
 `/assets/` files without changing the browser URL. The entire `/relaiapp/api/*`
 namespace runs the Worker first, so unknown API versions also return JSON 404
 instead of SPA HTML. The v1 health response remains `{"status":"ok"}`.
-
-`npm test` covers client routing and Worker responses. `npm run test:routing`
-builds the app and checks deep links, emitted asset URLs, and API isolation
-against the local Cloudflare production preview.
 
 完成遷移後至少提供：
 

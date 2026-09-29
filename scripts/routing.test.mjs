@@ -15,7 +15,7 @@ test('built Cloudflare routing under /relaiapp', { timeout: 60_000 }, async (t) 
     const navigateHeaders = { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' }
 
     await t.test('direct navigation and refresh return the built SPA document', async () => {
-      for (const path of ['', '/', '/login', '/home', '/cards', '/stats', '/settings']) {
+      for (const path of ['', '/', '/login', '/home', '/cards', '/flashcards', '/error-log', '/auth?mode=register', '/stats', '/settings']) {
         const response = await fetch(`${origin}/relaiapp${path}`, { headers: navigateHeaders })
         assert.equal(response.status, 200, path)
         assert.match(response.headers.get('content-type'), /text\/html/)
@@ -46,7 +46,7 @@ test('built Cloudflare routing under /relaiapp', { timeout: 60_000 }, async (t) 
     })
 
     await t.test('the entire API namespace bypasses SPA fallback', async () => {
-      for (const path of ['/api', '/api/', '/api/unknown', '/api/v1', '/api/v1/unknown', '/api/v2/health']) {
+      for (const path of ['/api', '/api/', '/api/unknown', '/api/v1', '/api/v1/unknown', '/api/v1/cards', '/api/v1/auth/login', '/api/v1/stats/summary', '/api/v1/settings', '/api/v2/health']) {
         const response = await fetch(`${origin}/relaiapp${path}`, { headers: navigateHeaders })
         assert.equal(response.status, 404, path)
         assert.match(response.headers.get('content-type'), /application\/json/)
