@@ -117,14 +117,11 @@ D1, OAuth credentials, real pepper or real beta accounts are needed. Ordinary
 module imports never open a platform proxy. Do not execute the CLI against real
 staging/production accounts during implementation or test validation.
 
-## Staging verification after authorization
+## Staging checks for account operations
 
-Do not apply the pending migration, create a real staging account or run this
-verification until the dependent PRs are merged and the Product Owner authorizes
-remote staging operations. Then follow Issue #50's sequence: apply the reviewed
-migration to `relai-staging-db`, create one dedicated temporary-password account
-through the interactive flow, login through the deployed UI, confirm forced
-redirection, change password, confirm Home and the cleared flag, logout, confirm
-old-password rejection and new-password login, check refresh/session behavior,
-and inspect browser storage and the HttpOnly cookie. Record only redacted
-PASS/FAIL evidence. Stop at the first staging blocker. Never target production.
+For an authorized staging check, verify the active Worker and migration history
+first. Then create a dedicated account through the interactive flow, log in,
+confirm forced password change, log out, and confirm the old password fails while
+the new one works. Inspect the HttpOnly cookie and browser storage without
+recording secrets. Use only `relai-prototype-staging` and `relai-staging-db`;
+production account operations require their separate release authorization.

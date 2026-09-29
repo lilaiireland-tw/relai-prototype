@@ -17,6 +17,7 @@ test('staging deployment guard rejects a production build, swapped DB, extra bin
   verifyStagingBuild(staging, staging)
   for (const patch of [
     { name: 'relai-prototype' },
+    { name: 'relai-prototype-staging-staging' },
     { workers_dev: false },
     { route: 'example.com/*' },
     { routes: ['example.com/*'] },

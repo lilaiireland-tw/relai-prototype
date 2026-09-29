@@ -69,7 +69,7 @@ Login and `/auth/me` expose `must_change_password` as a boolean. Product APIs
 can apply `requireAuth` followed by `requirePasswordChanged`; the latter rejects
 an authenticated user still requiring a change with `PASSWORD_CHANGE_REQUIRED`
 (403). Auth endpoints remain available during onboarding. The frontend change
-form and product route enforcement are implemented in Issue #50.
+form and product route enforcement are implemented in the current client.
 
 ## Validation and scope
 
@@ -105,10 +105,9 @@ Stale bootstrap results cannot overwrite a newer login or logout.
 Product data remains explicitly mock-backed; stats/settings remain placeholders.
 Run client tests with `npx vitest run src/client`, plus the required full validation
 and routing commands. These use synthetic responses without real beta accounts.
-Staging account validation remains the separate Issue #43.
+Remote account checks are separate operator actions.
 
-This integration adds no signup, recovery, JWT, Bearer/localStorage auth, product
-APIs, migrations, backend session-policy or infrastructure changes.
+The app has no signup, recovery, JWT, Bearer/localStorage auth or product data APIs.
 
 ## Password-change UI (Issue #50)
 
@@ -124,6 +123,6 @@ session is resolved through `/auth/me`. After success, `/auth/me` refreshes the
 safe user state before Home is shown. Credentials and tokens are never written
 to browser storage or application logs; the cookie remains browser managed.
 
-Offline client tests use synthetic responses. Staging migration, real account
-provisioning and browser validation remain pending until after merge and explicit
-Product Owner authorization.
+Offline client tests use synthetic responses. For remote account checks, verify
+the current staging deployment and migration history before following the
+[account runbook](admin-accounts.md). Do not infer live status from this document.

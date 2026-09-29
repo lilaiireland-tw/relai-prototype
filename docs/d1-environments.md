@@ -79,21 +79,22 @@ in `dist/client`. Dry runs show the selected D1 resource without deploying it.
 ## Migration source of truth (Issue #22)
 
 All D1 bindings explicitly point to repository-root `migrations/`. This directory
-is the v1 schema source of truth; legacy Supabase/Alembic SQL is not used.
+is the v1 schema source of truth. Its committed history includes `0001` and
+`0002`; check remote history separately before a deployment that depends on them.
 See [D1 migration workflow](d1-migrations.md) for exact create/list/apply commands,
 append-only rules, local persistence, and the explicit manual production runbook.
 Local operations use simulated D1; staging operations explicitly name
 `relai-staging-db` with source config and `--env staging --remote`. Production
 migration is an approved operator release action only. No migrations run through
 GitHub Actions, Cloudflare staging CD, or ordinary develop build/deploy commands.
-Issue #22 adds no SQL/application schema and applies no production migration.
+The migration workflow does not apply migrations through CI or ordinary deploys.
 
-## Deployment selection (commands documented, not executed)
+## Deployment selection
 
 From `develop`, `npm run deploy` rebuilds staging before deploying. From `main`,
 `npm run deploy:production` rebuilds production before deploying. Branch-to-environment
 selection is an operator rule; Git alone does not select bindings. No CD workflow,
-route/domain configuration, or actual Worker deployment was added in this issue.
+route/domain configuration, or actual Worker deployment follows from this mapping alone.
 
 ## Validation evidence and safety
 
@@ -109,12 +110,12 @@ route/domain configuration, or actual Worker deployment was added in this issue.
 - Client output was checked for database identifiers and secret configuration;
   none was present. Commit contents contain no secret values or local credentials.
 
-No application tables, schema migrations, user/application data writes, production
-seeds, authentication, Gemini integration, or legacy PostgreSQL changes were made.
+At the time of the provisioning checks above, no application tables, schema
+migrations, user/application data writes, or production seeds were made.
 No existing Cloudflare resource was deleted or recreated. The runtime health
 endpoint is unchanged and does not expose database details. Connectivity checks
 remain operator-only read-only CLI commands.
 
-Known limitations: application schema and queries remain future work. Production
+Known limitations: product data queries remain future work. Production
 routing and deployment automation are outside this issue. Wrangler's resolver API
 used by the check is marked unstable and may need adjustment on a Wrangler upgrade.

@@ -30,10 +30,10 @@ type and exactly `{"status":"ok"}` at `/relaiapp/api/v1/health`. It rejects redi
 and retries up to six times with ten-second timeouts and five-second delays.
 Health checks runtime availability, not schema, auth, Gemini or product acceptance.
 
-## Product Owner Dashboard setup
+## Product Owner Dashboard settings
 
-Perform this setup **after the revised PR is merged to `develop`**, so its commands
-exist on the selected branch. The connection has not been performed by Codex.
+Use these settings when auditing or reconnecting the existing staging Worker.
+Check the current Cloudflare build history for live connection status.
 
 1. Sign in to the Cloudflare account containing `relai-staging-db`. Open
    **Workers & Pages → relai-prototype-staging → Settings → Builds → Connect**.
@@ -65,7 +65,7 @@ exist on the selected branch. The connection has not been performed by Codex.
    authentication. Keep credentials in Cloudflare; do not copy local OAuth tokens
    into source or GitHub. [Build settings](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
    [Node version selection](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/).
-5. Save the connection and inspect the first build. Confirm its source is the
+5. Save or inspect the connection and inspect a build. Confirm its source is a
    merged `develop` SHA, the Worker is `relai-prototype-staging`, and deployment
    logs list only `DB` → `relai-staging-db`. Confirm its final health check passed
    and open the test app URL. If connection starts a build before branch settings
@@ -104,9 +104,10 @@ npm.cmd run verify:staging-health
 
 Environment selection happens at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).
 Deploy `dist/relai_prototype/wrangler.json` after verifying it. Do not attempt to
-retarget a staging build with `--env production`. No D1 migration is in this task.
+retarget a staging build with `--env production`. D1 migrations are separate
+operator actions.
 
-## Validation evidence and remaining setup
+## Historical validation evidence
 
 - Staging safety and health tests cover wrong Worker/D1/route settings, invalid
   health responses and exhausted retries; they need no remote credentials.
@@ -122,6 +123,45 @@ retarget a staging build with `--env production`. No D1 migration is in this tas
   binding verification. Explicit generated-config dry-run listed only
   `DB` → `relai-staging-db`; the revised live health script passed.
 
-The Product Owner still needs to authorize/connect the GitHub App in Cloudflare
-and complete the first Workers Builds run after merge. Local packaging and the
-existing live smoke deployment do not prove that the Dashboard connection works.
+The evidence above records the original bootstrap and review-time checks. It does
+not establish current Dashboard connection or deployment status. Inspect the
+Cloudflare Builds and Deployments tabs for the current state.
+
+## Accidental Worker from password-onboarding validation
+
+The intended staging Worker is **`relai-prototype-staging`**. A separate,
+unintended **`relai-prototype-staging-staging`** Worker was created during Issue
+#50 validation. The source `wrangler.jsonc` names only the intended staging Worker
+and `relai-prototype` for production. `npm run verify:staging-build` checks the
+generated deployment name and D1 binding; the deployment guard rejects the
+accidental name. No repository build or deploy command targets the extra Worker.
+
+The Product Owner can remove only the accidental Worker after reviewing its
+identity in the correct Cloudflare account:
+
+1. Run `npm run verify:d1-config`, `npm run build`, and
+   `npm run verify:staging-build` locally. Confirm the generated Worker name is
+   `relai-prototype-staging` and `DB` points to `relai-staging-db`.
+2. Run these **read-only** queries and compare their names and deployments:
+
+   ```sh
+   npx wrangler deployments list --name relai-prototype-staging-staging --json
+   npx wrangler deployments list --name relai-prototype-staging --json
+   ```
+
+   In **Workers & Pages**, open both exact names and verify the intended Worker
+   owns the stable staging URL, Git connection and current `develop` deployments.
+   Stop if the names, account or ownership are ambiguous.
+3. As the Product Owner, delete only `relai-prototype-staging-staging` in its
+   Dashboard **Settings → Delete Worker** action, or run this exact command after
+   reviewing the target:
+
+   ```sh
+   npx wrangler delete --name relai-prototype-staging-staging
+   ```
+
+   Do not add `--env staging` or use the repository's default Worker name. Never
+   target `relai-prototype-staging`, `relai-prototype`, or either D1 database.
+   Codex does not perform this deletion. See the
+   [Cloudflare Wrangler Worker delete reference](https://developers.cloudflare.com/workers/wrangler/commands/workers/#delete)
+   for the `--name` option.

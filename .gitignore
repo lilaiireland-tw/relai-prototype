@@ -14,12 +14,13 @@
 # testing
 /coverage
 
-# next.js
-/.next/
+# Locally generated output from removed legacy frontend checkouts
 **/.next/
-/.next-relai/
 **/.next-relai/
-/out/
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
+.venv/
 
 # production
 /build
@@ -42,15 +43,6 @@ yarn-error.log*
 .env.*
 !.env.example
 !**/.env.example
-
-# python
-**/__pycache__/
-**/.pytest_cache/
-.venv/
-**/.venv/
-
-# vercel
-.vercel
 
 # claude code local settings (machine-specific, may contain command history with secrets)
 .claude/
