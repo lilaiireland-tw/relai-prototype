@@ -61,5 +61,30 @@ no real accounts, secrets, remote D1 or persistent database. The transport does
 not reproduce Cloudflare network/runtime behavior; staging end-to-end validation
 belongs to the separately authorized follow-up task.
 
-The frontend still uses DemoSession. This issue adds no signup, recovery, JWT,
-Bearer/localStorage auth, product APIs, migrations or infrastructure changes.
+## Frontend integration (Issue #42)
+
+The centralized `src/client/lib/api.ts` exposes typed `login`, `me` and `logout`
+methods with same-origin URLs, mode and credentials. It validates and projects
+safe user fields only. `AuthSessionProvider` owns the authenticated user in memory;
+the password remains transient login-form input and is cleared after submission.
+No password or token is written to browser storage, and JavaScript never reads or
+manages the HttpOnly cookie.
+
+Startup calls `me`; 200 restores the user, 401 becomes unauthenticated, and
+network/server/invalid-response failures show a safe retry state. Protected routes
+do not mount while status is loading or unresolved. Home, cards, error log, stats,
+settings and the flashcards alias are protected. Splash and login remain public.
+Login preserves exact credentials, displays a generic 401 error, and navigates to
+home on success. Logout calls the API before clearing state and navigating to
+login; failures still clear local state and explicitly report unconfirmed server
+revocation. Authenticated app focus revalidates `me`, so mock-only browsing can
+detect expired sessions. Centralized session 401 handling also clears auth state.
+Stale bootstrap results cannot overwrite a newer login or logout.
+
+Product data remains explicitly mock-backed; stats/settings remain placeholders.
+Run client tests with `npx vitest run src/client`, plus the required full validation
+and routing commands. These use synthetic responses without real beta accounts.
+Staging account validation remains the separate Issue #43.
+
+This integration adds no signup, recovery, JWT, Bearer/localStorage auth, product
+APIs, migrations, backend session-policy or infrastructure changes.

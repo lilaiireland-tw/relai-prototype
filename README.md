@@ -128,7 +128,8 @@ Issue #41 implements the Worker login, me and logout endpoints under
 `/relaiapp/api/v1/auth`, with typed session middleware and the approved fixed
 seven-day HttpOnly cookie policy. See [auth/session API](docs/auth-session-api.md)
 for contracts, failure behavior and offline tests (`npm run test:auth-api`).
-Frontend DemoSession replacement remains a separate task.
+Issue #42 connects the frontend through the centralized same-origin client and
+`AuthSessionProvider`, with protected routes and `/auth/me` bootstrap.
 
 ### 產品規則
 
@@ -773,20 +774,26 @@ and `/relaiapp/` render the migrated splash screen. React Router uses Vite's
 old mode queries) redirects to login; `/flashcards` redirects to `/cards`.
 `/stats` and `/settings` remain future-feature placeholders.
 
-The username/password form accepts any nonempty demo values. Use dummy credentials;
-it is client-only UI state, not production authentication. Passwords and tokens are
-not stored. Reload clears the demo profile, while mock screens remain directly
-previewable. Logout returns to login. No public registration UI is provided.
+The username/password form uses the real Worker login API with exact credentials.
+Startup restores the safe user profile through `/auth/me`. Only `/` and `/login`
+are public; home, cards, error log, stats, settings and the flashcards alias require
+authentication. Protected content stays unmounted while auth is loading; bootstrap
+server/network failures show a retry screen. Session 401 responses return to login.
+Returning focus to an authenticated app rechecks `/auth/me`, including when browsing
+mock product screens. Logout calls the Worker, clears client state and returns to
+login; a failed logout displays that server revocation could not be confirmed.
+Passwords/tokens are never persisted, and JavaScript never manages the cookie.
+No public registration UI is provided.
 
 `src/client/services/data.ts` is the replaceable asynchronous client data adapter;
 components consume its PRD-shaped card, stats and settings contracts. Fixtures in
 `services/mock.ts` are derived from the legacy visual reference. Today's progress
 uses a daily review count, not lifetime reviews. Mock review navigation does not
 persist review events or change stats. Future same-origin Worker APIs can replace
-the adapter without porting the UI again. No real auth, cards, stats, settings,
+the adapter without porting the UI again. No real cards, stats, settings,
 Gemini or browser D1 integration is included. `frontend-web` remains untouched.
 
-`npm test` covers direct client routes, navigation, demo login/logout, mock content,
+`npm test` covers direct client routes, navigation, real-auth contracts, mock content,
 card flip/next, error log and registration absence. `npm run test:routing` verifies
 built SPA deep links/assets and that the API namespace continues returning JSON
 independently of SPA fallback.
@@ -794,10 +801,11 @@ independently of SPA fallback.
 ### Browser API adapter (Issue #33)
 
 `src/client/lib/api.ts` centralizes typed browser transport. The only exposed
-request is `GET /relaiapp/api/v1/health`; URLs are root-relative and same-origin
-on every SPA route. Requests use `credentials: 'same-origin'` for future
-browser-managed HttpOnly cookies, without tokens or credential storage. The
-client validates the health JSON contract, rejects non-2xx/network/malformed
+requests are health plus login, me and logout under `/relaiapp/api/v1`; URLs are
+root-relative and same-origin on every SPA route. Requests use
+`credentials: 'same-origin'` for browser-managed HttpOnly cookies, without tokens
+or credential storage. The client validates health and safe-user JSON contracts,
+rejects non-2xx/network/malformed
 responses with safe errors, and limits requests to 10 seconds.
 
 The Home connectivity panel consumes `services/runtime.ts` (`source: 'api'`)

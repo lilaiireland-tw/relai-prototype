@@ -12,12 +12,13 @@ import {
 
 import BottomNav from "../components/BottomNav";
 import ProgressRing from "../components/ProgressRing";
-import { useDemoSession } from "../components/DemoSession";
+import { useAuthSession } from "../components/AuthSession";
 import { clientData } from "../services/data";
 import WorkerHealth from "../components/WorkerHealth";
 
 export default function HomePage() {
-  const { profile } = useDemoSession();
+  const { state } = useAuthSession();
+  const profile = state.user;
   const { data: bootstrap, error, reload: refreshBootstrap } = useClientData(() => clientData.getHome());
   const flashcards = bootstrap?.cards ?? [];
 
@@ -43,7 +44,7 @@ export default function HomePage() {
         <header className="flex items-center justify-between px-5 pt-6">
           <div>
             <h1 className="text-xl font-bold text-text-primary">ReLai</h1>
-            <p data-source={clientData.source} className="text-sm text-text-secondary">示範模式 · 首頁、卡片、統計與設定：模擬資料</p>
+            <p data-source={clientData.source} className="text-sm text-text-secondary">首頁、卡片、統計與設定：模擬資料</p>
           </div>
           <button
             type="button"
@@ -64,9 +65,9 @@ export default function HomePage() {
               </div>
               <div className="min-w-0">
                 <p className="truncate text-base font-semibold text-text-primary">
-                  {profile?.display_name || profile?.username || "Alex"}
+                  {profile?.display_name || profile?.username}
                 </p>
-                <p className="truncate text-sm text-text-secondary">{profile?.username || "demo"}</p>
+                <p className="truncate text-sm text-text-secondary">{profile?.username}</p>
               </div>
             </div>
           </div>

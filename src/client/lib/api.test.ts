@@ -3,6 +3,44 @@ import { apiUrl, createApiClient } from './api'
 import { createApp } from '../../worker'
 
 describe('same-origin client API', () => {
+  const user = { id: 'u1', username: 'Exact User', display_name: 'Alex', role: 'user' }
+  it('uses the typed auth contract and preserves credentials exactly', async () => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ user, token: 'must-discard' }))
+    const client = createApiClient(transport)
+    await expect(client.login({ username: ' Exact User ', password: ' Secret ' })).resolves.toEqual({ user })
+    expect(transport).toHaveBeenLastCalledWith('/relaiapp/api/v1/auth/login', expect.objectContaining({
+      method: 'POST', mode: 'same-origin', credentials: 'same-origin', cache: 'no-store',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: ' Exact User ', password: ' Secret ' }),
+    }))
+    await expect(client.me()).resolves.toEqual({ user })
+    expect(transport).toHaveBeenLastCalledWith('/relaiapp/api/v1/auth/me', expect.objectContaining({ method: 'GET', credentials: 'same-origin' }))
+    transport.mockResolvedValue(new Response(null, { status: 204 }))
+    await expect(client.logout()).resolves.toBeUndefined()
+    expect(transport).toHaveBeenLastCalledWith('/relaiapp/api/v1/auth/logout', expect.objectContaining({ method: 'POST', credentials: 'same-origin' }))
+  })
+  it('projects only safe user fields and rejects invalid auth responses', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ user: { ...user, password: 'private', token: 'private' } }))
+    await expect(createApiClient(transport).me()).resolves.toEqual({ user })
+    for (const value of [null, {}, { user: null }, { user: { ...user, id: 42 } }, { user: { ...user, role: 'unknown' } }]) {
+      transport.mockResolvedValue(Response.json(value))
+      await expect(createApiClient(transport).me()).rejects.toMatchObject({ kind: 'invalid-response' })
+    }
+  })
+  it('notifies session expiry subscribers, excluding login errors and caller-managed me', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response('private', { status: 401 }))
+    const client = createApiClient(transport)
+    const expired = vi.fn()
+    const unsubscribe = client.onUnauthorized(expired)
+    await expect(client.login({ username: 'x', password: 'x' })).rejects.toMatchObject({ status: 401 })
+    await expect(client.me()).rejects.toMatchObject({ status: 401 })
+    expect(expired).not.toHaveBeenCalled()
+    await expect(client.getHealth()).rejects.toMatchObject({ status: 401 })
+    expect(expired).toHaveBeenCalledTimes(1)
+    unsubscribe()
+    await expect(client.getHealth()).rejects.toMatchObject({ status: 401 })
+    expect(expired).toHaveBeenCalledTimes(1)
+  })
   it('constructs the health URL independently of the current SPA route', () => {
     expect(apiUrl('/health')).toBe('/relaiapp/api/v1/health')
   })
