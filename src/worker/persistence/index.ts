@@ -7,5 +7,5 @@ export function createRepositories(db: PersistenceDatabase) {
 }
 
 export { tokenDigest } from './types'
-export type { CreateSessionInput, CreateUserInput, SessionRow, UserRow, TokenDigest } from './types'
+export type { CreateSessionInput, CreateUserInput, UpdateCredentialInput, SessionRow, UserRow, TokenDigest } from './types'
 export type { MutationResult, PersistenceDatabase } from './d1'

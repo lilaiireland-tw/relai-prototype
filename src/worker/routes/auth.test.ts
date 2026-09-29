@@ -49,7 +49,9 @@ describe('closed-beta auth API', () => {
     logs = ['log', 'warn', 'error', 'info', 'debug'].map(method =>
       vi.spyOn(console, method as 'log').mockImplementation(() => {}))
     sqlite = new DatabaseSync(':memory:')
-    sqlite.exec(readFileSync('migrations/0001_initial_core_schema.sql', 'utf8'))
+    for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()) {
+      sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
+    }
     db = sqliteD1(sqlite)
     repositories = createRepositories(db)
     env = { DB: db, AUTH_PEPPER: testPepper }
@@ -111,6 +113,18 @@ describe('closed-beta auth API', () => {
     expect(JSON.stringify(sqlite.prepare('SELECT * FROM sessions').all())).not.toContain(tokenFrom(response))
     expect(await repositories.users.findById(profile.id)).toMatchObject({ last_login_at: at })
     expect(JSON.stringify([...response.headers].filter(([key]) => key !== 'set-cookie'))).not.toContain(tokenFrom(response))
+  })
+
+  it('preserves login and safe public responses for a password-change-required account', async () => {
+    await repositories.users.updateCredential(profile.id, { ...credential,
+      must_change_password: true, updated_at: at })
+    const response = await login()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ user: profile })
+    const me = await request('/auth/me', { headers: { Cookie: cookie(response) } })
+    expect(me.status).toBe(200)
+    expect(await me.json()).toEqual({ user: profile })
+    expect(await repositories.users.findById(profile.id)).toMatchObject({ must_change_password: true })
   })
 
   it('preserves username and password exactly and ignores client authorization fields', async () => {

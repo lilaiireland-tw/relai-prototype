@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createRepositories, tokenDigest, type CreateUserInput, type TokenDigest } from './index'
 import { insertRow, mutate, type PersistenceDatabase, type PersistenceStatement, type SqlValue } from './d1'
@@ -42,14 +43,90 @@ describe('users and sessions persistence', () => {
 
   beforeEach(() => {
     sqlite = new DatabaseSync(':memory:')
-    sqlite.exec(readFileSync('migrations/0001_initial_core_schema.sql', 'utf8'))
+    for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()) {
+      sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
+    }
     repositories = createRepositories(sqliteD1(sqlite))
   })
   afterEach(() => sqlite.close())
 
+  it('keeps migration history append-only and migrates existing users to false', async () => {
+    const initial = readFileSync('migrations/0001_initial_core_schema.sql', 'utf8')
+    // Git checkouts may use CRLF; pin the committed SQL content independent of line endings.
+    expect(createHash('sha256').update(initial.replace(/\r\n/g, '\n')).digest('hex')).toBe(
+      'ac5b16e3b0d8c264a271d6dd7fef4df55ecd5428654097dd42d6ff0c75a14337')
+    expect(readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()).toEqual([
+      '0001_initial_core_schema.sql', '0002_add_users_must_change_password.sql',
+    ])
+    const legacy = new DatabaseSync(':memory:')
+    try {
+      legacy.exec(initial)
+      legacy.prepare(`INSERT INTO users (id, username, display_name, password_salt,
+        password_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(user.id, user.username, user.display_name, user.password_salt, user.password_digest, at, at)
+      const before = legacy.prepare('SELECT * FROM users').get()!
+      legacy.exec(readFileSync('migrations/0002_add_users_must_change_password.sql', 'utf8'))
+      expect(legacy.prepare('SELECT * FROM users').get()).toEqual({ ...before, must_change_password: 0 })
+      const users = createRepositories(sqliteD1(legacy)).users
+      expect(await users.findById(user.id)).toEqual({ ...before, must_change_password: false })
+      // Old SQL callers that omit the column continue to receive the database default.
+      legacy.prepare(`INSERT INTO users (id, username, display_name, password_salt,
+        password_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run('old-caller', 'other', 'Other', 'salt', 'digest', at, at)
+      expect(await users.findById('old-caller')).toMatchObject({ must_change_password: false })
+    } finally { legacy.close() }
+  })
+
+  it.each([true, false])('creates and reads password-change state %s as a boolean', async flag => {
+    const row = await repositories.users.create({ ...user, must_change_password: flag })
+    expect(row.must_change_password).toBe(flag)
+    expect(sqlite.prepare('SELECT must_change_password FROM users WHERE id = ?').get(user.id))
+      .toEqual({ must_change_password: flag ? 1 : 0 })
+    expect(await repositories.users.findById(user.id)).toEqual(row)
+    expect(await repositories.users.findByUsername(user.username)).toEqual(row)
+  })
+
+  it.each([true, false])('updates credentials and all state together from flag %s', async initialFlag => {
+    const before = await repositories.users.create({ ...user, must_change_password: initialFlag })
+    const other = await repositories.users.create({ ...user, id: 'other', username: 'other' })
+    const input = { password_salt: "salt'); DROP TABLE users; --", password_digest: 'fresh-digest',
+      must_change_password: !initialFlag, updated_at: later }
+    expect(await repositories.users.updateCredential("' OR 1=1 --", input)).toEqual({ changes: 0 })
+    expect(await repositories.users.findById(user.id)).toEqual(before)
+    expect(await repositories.users.updateCredential(user.id, input)).toEqual({ changes: 1 })
+    expect(await repositories.users.findById(user.id)).toEqual({ ...before, ...input })
+    expect(sqlite.prepare('SELECT password_salt, password_digest, must_change_password, updated_at FROM users WHERE id = ?')
+      .get(user.id)).toEqual({ ...input, must_change_password: input.must_change_password ? 1 : 0 })
+    expect(await repositories.users.findById(other.id)).toEqual(other)
+    expect(await repositories.users.updateCredential('missing', input)).toEqual({ changes: 0 })
+    // Legacy admin replacement preserves the flag instead of choosing onboarding policy.
+    await repositories.users.replaceCredential(user.id, { ...input, password_digest: 'legacy-digest' })
+    expect(await repositories.users.findById(user.id)).toMatchObject({ must_change_password: !initialFlag })
+  })
+
+  it('keeps the account projection fixed without selecting credential fields', async () => {
+    await repositories.users.create({ ...user, must_change_password: true })
+    expect(await repositories.users.listAccounts()).toEqual([{
+      id: user.id, username: user.username, display_name: user.display_name, role: 'user', is_active: 1,
+      cohort_source: null, created_at: at, updated_at: at, last_login_at: null,
+    }])
+  })
+
+  it('leaves all credential fields unchanged when the combined update fails', async () => {
+    const before = await repositories.users.create({ ...user, must_change_password: true })
+    // Test-only trigger simulates a database rejection during the single UPDATE.
+    sqlite.exec(`CREATE TRIGGER reject_credential BEFORE UPDATE OF password_digest ON users
+      BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`)
+    await expect(repositories.users.updateCredential(user.id, {
+      password_salt: 'fresh-salt', password_digest: 'fresh-digest',
+      must_change_password: false, updated_at: later,
+    })).rejects.toThrow('synthetic failure')
+    expect(await repositories.users.findById(user.id)).toEqual(before)
+  })
+
   it('creates and looks up users with schema defaults and nullable fields', async () => {
     const row = await repositories.users.create(user)
-    expect(row).toEqual({ ...user, role: 'user', is_active: 1, cohort_source: null, last_login_at: null })
+    expect(row).toEqual({ ...user, must_change_password: false, role: 'user', is_active: 1, cohort_source: null, last_login_at: null })
     expect(await repositories.users.findById(user.id)).toEqual(row)
     expect(await repositories.users.findByUsername(user.username)).toEqual(row)
     expect(await repositories.users.findById('missing')).toBeNull()
@@ -60,9 +137,9 @@ describe('users and sessions persistence', () => {
     const input = { ...user, role: 'custom-role', is_active: 0 as const,
       cohort_source: 'custom-cohort', last_login_at: at }
     const row = await repositories.users.create(input)
-    expect(row).toEqual(input)
-    expect(await repositories.users.findById(user.id)).toEqual(input)
-    expect(await repositories.users.findByUsername(user.username)).toEqual(input)
+    expect(row).toEqual({ ...input, must_change_password: false })
+    expect(await repositories.users.findById(user.id)).toEqual({ ...input, must_change_password: false })
+    expect(await repositories.users.findByUsername(user.username)).toEqual({ ...input, must_change_password: false })
   })
 
   it('updates only approved login, credential and activation fields', async () => {
@@ -74,7 +151,7 @@ describe('users and sessions persistence', () => {
     expect(await repositories.users.setActive(user.id, 0, later)).toEqual({ changes: 1 })
     expect(await repositories.users.findById(user.id)).toEqual({ ...user,
       password_salt: 'new-salt', password_digest: 'new-digest', updated_at: later,
-      role: 'user', is_active: 0, cohort_source: null, last_login_at: later,
+      must_change_password: false, role: 'user', is_active: 0, cohort_source: null, last_login_at: later,
     })
     expect(await repositories.users.recordLogin('missing', later)).toEqual({ changes: 0 })
     expect(await repositories.users.setActive('missing', 0, later)).toEqual({ changes: 0 })
