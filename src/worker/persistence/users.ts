@@ -52,6 +52,13 @@ export function createUsersRepository(db: PersistenceDatabase) {
         .bind(input.password_salt, input.password_digest, input.must_change_password ? 1 : 0,
           input.updated_at, authenticatedUserId))
     },
+    changeCredential(authenticatedUserId: string, currentDigest: string, input: UpdateCredentialInput) {
+      return mutate(db.prepare(`UPDATE users SET password_salt = ?, password_digest = ?,
+        must_change_password = 0, updated_at = ?
+        WHERE id = ? AND password_digest = ? AND is_active = 1`)
+        .bind(input.password_salt, input.password_digest, input.updated_at,
+          authenticatedUserId, currentDigest))
+    },
     setActive(id: string, active: SqlBoolean, updatedAt: string) {
       return mutate(db.prepare('UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?')
         .bind(active, updatedAt, id))

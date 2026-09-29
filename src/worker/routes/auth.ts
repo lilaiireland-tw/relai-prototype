@@ -7,6 +7,7 @@ import { createRepositories } from '../persistence'
 import { createAuthService } from '../services/auth'
 
 const loginInput = z.object({ username: z.string().min(1), password: z.string().min(1) })
+const changePasswordInput = z.object({ current_password: z.string().min(1), new_password: z.string().min(8) })
 export const auth = new Hono<AuthEnv>()
 
 auth.use('*', async (c, next) => {
@@ -31,6 +32,21 @@ auth.post('/login', async (c) => {
 })
 
 auth.get('/me', requireAuth, (c) => c.json({ user: c.get('user') }))
+
+auth.post('/change-password', requireAuth, async (c) => {
+  let body: unknown
+  try { body = await c.req.json() } catch { body = undefined }
+  const input = changePasswordInput.safeParse(body)
+  if (!input.success) {
+    return c.json({ error: { code: 'INVALID_INPUT', message: 'Invalid password change request.' } }, 400)
+  }
+  const user = await createAuthService(createRepositories(c.env.DB)).changePassword(
+    c.get('user').id, input.data.current_password, input.data.new_password, c.env.AUTH_PEPPER)
+  if (!user) {
+    return c.json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid current password.' } }, 401)
+  }
+  return c.json({ user })
+})
 
 auth.post('/logout', async (c) => {
   // Clear first so even the safe 500 boundary on an internal failure clears it.

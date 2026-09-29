@@ -5,6 +5,7 @@ export interface SafeUser {
   username: string
   display_name: string
   role: string
+  must_change_password: boolean
 }
 
 /** Server-only binding subset. No auth material belongs in shared/client types. */

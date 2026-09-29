@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRouter } from './App'
 import { clientData } from './services/data'
 
-const user = { id: 'test-user', username: 'Alex', display_name: 'Alex', role: 'user' }
+const user = { id: 'test-user', username: 'Alex', display_name: 'Alex', role: 'user', must_change_password: false }
 const authResponse = () => Response.json({ user })
 
 describe('migrated client under /relaiapp', () => {
