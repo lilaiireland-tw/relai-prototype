@@ -150,41 +150,13 @@ The evidence above records the original bootstrap and review-time checks. It doe
 not establish current Dashboard connection or deployment status. Inspect the
 Cloudflare Builds and Deployments tabs for the current state.
 
-## Accidental Worker from password-onboarding validation
+## Staging Worker name safety
 
-The intended staging Worker is **`relai-prototype-staging`**. A separate,
-unintended **`relai-prototype-staging-staging`** Worker was created during Issue
-#50 validation. The source `wrangler.jsonc` names only the intended staging Worker
-and `relai-prototype` for production. `npm run verify:staging-build` checks the
-generated deployment name and D1 binding; the deployment guard rejects the
-accidental name. No repository build or deploy command targets the extra Worker.
-
-The Product Owner can remove only the accidental Worker after reviewing its
-identity in the correct Cloudflare account:
-
-1. Run `npm run verify:d1-config`, `npm run build`, and
-   `npm run verify:staging-build` locally. Confirm the generated Worker name is
-   `relai-prototype-staging` and `DB` points to `relai-staging-db`.
-2. Run these **read-only** queries and compare their names and deployments:
-
-   ```sh
-   npx wrangler deployments list --name relai-prototype-staging-staging --json
-   npx wrangler deployments list --name relai-prototype-staging --json
-   ```
-
-   In **Workers & Pages**, open both exact names and verify the intended Worker
-   owns the stable staging URL, Git connection and current `develop` deployments.
-   Stop if the names, account or ownership are ambiguous.
-3. As the Product Owner, delete only `relai-prototype-staging-staging` in its
-   Dashboard **Settings → Delete Worker** action, or run this exact command after
-   reviewing the target:
-
-   ```sh
-   npx wrangler delete --name relai-prototype-staging-staging
-   ```
-
-   Do not add `--env staging` or use the repository's default Worker name. Never
-   target `relai-prototype-staging`, `relai-prototype`, or either D1 database.
-   Codex does not perform this deletion. See the
-   [Cloudflare Wrangler Worker delete reference](https://developers.cloudflare.com/workers/wrangler/commands/workers/#delete)
-   for the `--name` option.
+The unintended `relai-prototype-staging-staging` Worker created during Issue #50
+validation was manually removed by the Product Owner. The intended Worker remains
+`relai-prototype-staging`. The duplicate suffix resulted from passing
+`CLOUDFLARE_ENV=staging` to a separate Wrangler deploy process after Vite had
+already emitted a flattened staging config. Keep that variable unset for deploys
+of `dist/relai_prototype/wrangler.json`; `npm run verify:staging-build` rejects an
+inherited value and verifies the generated Worker name and D1 binding before
+either staging deploy command runs.
