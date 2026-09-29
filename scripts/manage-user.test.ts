@@ -1,10 +1,13 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { PassThrough, Writable } from 'node:stream'
+import type { ReadStream, WriteStream } from 'node:tty'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRepositories, tokenDigest } from '../src/worker/persistence'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../src/worker/persistence/d1'
 import { verifyPassword } from '../src/worker/auth/crypto'
 import { generatePassword, parseArguments, runManageUser } from './manage-user'
+import { promptTerminal } from './manage-user-prompt'
 
 vi.mock('wrangler', () => ({ getPlatformProxy: vi.fn(() => { throw new Error('Remote access forbidden in tests') }) }))
 
@@ -46,6 +49,98 @@ describe('offline admin account management', () => {
   afterEach(() => { sqlite.close(); vi.unstubAllEnvs(); vi.restoreAllMocks() })
   const run = (argv: string[]) => runManageUser(argv, { openPlatform, output, error })
   const password = () => output.mock.calls.at(-1)![0].split('Password: ')[1]
+  const interactive = ['create', '--interactive', '--env', 'staging']
+  function answers(chosen: string, confirmation = chosen, username = 'Tina') {
+    const values = [username, 'Tina', '', chosen, confirmation]
+    return vi.fn(async () => values.shift()!)
+  }
+
+  it.each(['12345678', ' temporary e\u0301 password '])('creates interactive accounts with exact chosen credentials offline', async (chosen) => {
+    const prompt = answers(chosen)
+    expect(await runManageUser(interactive, { openPlatform, output, error, prompt })).toBe(0)
+    expect(prompt.mock.calls).toEqual([
+      ['Username: ', false], ['Display name: ', false], ['Cohort source (optional): ', false],
+      ['Temporary password: ', true], ['Confirm temporary password: ', true],
+    ])
+    const row = (await repositories.users.findByUsername('Tina'))!
+    expect(row).toMatchObject({ must_change_password: true, cohort_source: null, is_active: 1 })
+    expect(sqlite.prepare('SELECT must_change_password FROM users').get()!.must_change_password).toBe(1)
+    expect(await verifyPassword(chosen, row, process.env.AUTH_PEPPER!)).toBe(true)
+    if (chosen.trim() !== chosen) {
+      expect(await verifyPassword(chosen.trim(), row, process.env.AUTH_PEPPER!)).toBe(false)
+      expect(await verifyPassword(chosen.normalize('NFC'), row, process.env.AUTH_PEPPER!)).toBe(false)
+    }
+    expect(JSON.stringify(sqlite.prepare('SELECT * FROM users').all()).includes(chosen)).toBe(false)
+    expect(output.mock.calls).toEqual([['Account created; password change required.']])
+    expect(JSON.stringify([output.mock.calls, error.mock.calls]).includes(chosen)).toBe(false)
+    for (const method of logs) expect(console[method]).not.toHaveBeenCalled()
+    const { getPlatformProxy } = await import('wrangler')
+    expect(getPlatformProxy).not.toHaveBeenCalled()
+    expect(openPlatform).toHaveBeenCalledWith('staging')
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses a fresh salt for each interactive account with the same password', async () => {
+    const chosen = crypto.randomUUID()
+    for (const username of ['One', 'Two']) {
+      expect(await runManageUser(interactive, { openPlatform, output, error, prompt: answers(chosen, chosen, username) })).toBe(0)
+    }
+    const one = (await repositories.users.findByUsername('One'))!
+    const two = (await repositories.users.findByUsername('Two'))!
+    expect(one.password_salt).not.toBe(two.password_salt)
+    expect(one.password_digest).not.toBe(two.password_digest)
+  })
+
+  it.each([
+    ['1234567', '1234567', 'Temporary password must contain at least 8 characters.'],
+    ['12345678', '87654321', 'Temporary password confirmation does not match.'],
+    ['12345678 ', '12345678', 'Temporary password confirmation does not match.'],
+  ])('rejects invalid temporary passwords before platform access', async (chosen, confirmation, message) => {
+    expect(await runManageUser(interactive, { openPlatform, output, error, prompt: answers(chosen, confirmation) })).toBe(1)
+    expect(error.mock.calls).toEqual([[message]])
+    expect(openPlatform).not.toHaveBeenCalled()
+    expect(output).not.toHaveBeenCalled()
+    expect(sqlite.prepare('SELECT count(*) AS count FROM users').get()!.count).toBe(0)
+  })
+
+  it('checks pepper and production confirmation before prompting or opening the platform', async () => {
+    const prompt = answers(crypto.randomUUID())
+    for (const confirmation of [[], ['--confirm-production', 'wrong']]) {
+      expect(await runManageUser(['create', '--interactive', '--env', 'production', ...confirmation],
+        { openPlatform, output, error, prompt })).toBe(1)
+    }
+    expect(prompt).not.toHaveBeenCalled()
+    expect(openPlatform).not.toHaveBeenCalled()
+    vi.stubEnv('AUTH_PEPPER', undefined)
+    expect(await runManageUser(interactive, { openPlatform, output, error, prompt })).toBe(1)
+    expect(prompt).not.toHaveBeenCalled()
+    expect(openPlatform).not.toHaveBeenCalled()
+    vi.stubEnv('AUTH_PEPPER', crypto.randomUUID())
+    expect(await runManageUser(['create', '--interactive', '--env', 'production', '--confirm-production', 'relai-prod-db'],
+      { openPlatform, output, error, prompt })).toBe(0)
+    expect(openPlatform).toHaveBeenCalledWith('production')
+  })
+
+  it('fails interactive input and transport safely without exposing chosen credentials', async () => {
+    const chosen = crypto.randomUUID()
+    const prompt = vi.fn(async () => { throw new Error(chosen) })
+    expect(await runManageUser(interactive, { openPlatform, output, error, prompt })).toBe(1)
+    expect(openPlatform).not.toHaveBeenCalled()
+    db.prepare = () => { throw new Error(chosen) }
+    expect(await runManageUser(interactive, { openPlatform, output, error, prompt: answers(chosen) })).toBe(1)
+    expect(error.mock.calls).toEqual(Array.from({ length: 2 }, () => ['Account operation failed; no credential output.']))
+    expect(output).not.toHaveBeenCalled()
+    for (const method of logs) expect(console[method]).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['create', '--interactive', '--interactive'], ['create', '--interactive', '--password', 'forbidden'],
+    [...create, '--password', 'forbidden'], [...create, '--interactive'], ['list', '--interactive'],
+    ['reset-password', '--interactive'], ['create', '--interactive', 'true'],
+  ].map(argv => [argv]))('rejects unsupported interactive arguments before access: %j', async (argv) => {
+    expect(await run(argv)).toBe(1)
+    expect(openPlatform).not.toHaveBeenCalled()
+  })
 
   it('creates active accounts with exact username, free-text cohort, defaults, UUID and UTC timestamps', async () => {
     expect(await run([...create, '--cohort-source', ' custom cohort '])).toBe(0)
@@ -53,7 +148,7 @@ describe('offline admin account management', () => {
     const row = (await repositories.users.findByUsername('Alex'))!
     expect(await repositories.users.findByUsername('alex')).toBeNull()
     expect(row).toMatchObject({ username: 'Alex', display_name: 'Alex', role: 'user',
-      is_active: 1, cohort_source: ' custom cohort ', last_login_at: null })
+      is_active: 1, must_change_password: true, cohort_source: ' custom cohort ', last_login_at: null })
     expect(row.id).toMatch(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
     expect(row.created_at).toBe(new Date(row.created_at).toISOString())
     expect(row.updated_at).toBe(row.created_at)
@@ -249,5 +344,55 @@ describe('offline admin account management', () => {
     await import('./manage-user')
     const { getPlatformProxy } = await import('wrangler')
     expect(getPlatformProxy).not.toHaveBeenCalled()
+  })
+})
+
+describe('terminal password input', () => {
+  function terminal() {
+    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn() })
+    let text = ''
+    const output = Object.assign(new Writable({ write(chunk, _encoding, done) { text += chunk.toString(); done() } }), { isTTY: true })
+    return { input, output, text: () => text,
+      ask: (secret = true) => promptTerminal('Temporary password: ', secret,
+        input as unknown as ReadStream, output as unknown as WriteStream) }
+  }
+
+  it('preserves pasted whitespace and Unicode without echoing plaintext and restores cooked mode', async () => {
+    const tty = terminal()
+    const chosen = ' pasted e\u0301 password '
+    const result = tty.ask()
+    tty.input.write(`${chosen}\r`)
+    expect(await result).toBe(chosen)
+    expect(tty.text()).toBe('Temporary password: \n')
+    expect(tty.input.setRawMode.mock.calls).toEqual([[true], [false]])
+    expect(tty.input.listenerCount('keypress')).toBe(0)
+  })
+
+  it.each(['\u0003', '\u0004'])('cancels safely and restores terminal input: %j', async (key) => {
+    const tty = terminal()
+    const result = tty.ask()
+    tty.input.write(key)
+    await expect(result).rejects.toThrow(/Input (cancelled|closed)/)
+    expect(tty.input.setRawMode.mock.calls).toEqual([[true], [false]])
+    expect(tty.text()).toBe('Temporary password: \n')
+    expect(tty.input.listenerCount('keypress')).toBe(0)
+  })
+
+  it('echoes ordinary fields', async () => {
+    const tty = terminal()
+    const result = tty.ask(false)
+    tty.input.write('Tina\r')
+    expect(await result).toBe('Tina')
+    expect(tty.text()).toContain('Tina')
+  })
+
+  it('refuses non-TTY input or output before reading', async () => {
+    for (const stream of ['input', 'output'] as const) {
+      const tty = terminal()
+      tty[stream].isTTY = false
+      await expect(tty.ask()).rejects.toThrow('Interactive input requires a TTY.')
+      expect(tty.text()).toBe('')
+      expect(tty.input.setRawMode).not.toHaveBeenCalled()
+    }
   })
 })
