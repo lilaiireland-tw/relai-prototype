@@ -380,10 +380,42 @@ describe('terminal password input', () => {
 
   it('echoes ordinary fields', async () => {
     const tty = terminal()
-    const result = tty.ask(false)
+    const result = promptTerminal('Username: ', false,
+      tty.input as unknown as ReadStream, tty.output as unknown as WriteStream)
+    expect(tty.text()).toContain('Username: ')
     tty.input.write('Tina\r')
     expect(await result).toBe('Tina')
     expect(tty.text()).toContain('Tina')
+  })
+
+  it('renders ordinary prompts in order before input and keeps both secret answers hidden', async () => {
+    const tty = terminal()
+    for (const [label, value] of [
+      ['Username: ', 'Tina'], ['Display name: ', 'Tina'], ['Cohort source (optional): ', ''],
+      ['Temporary password: ', ' pasted e\u0301 password '],
+      ['Confirm temporary password: ', ' pasted e\u0301 password '],
+    ]) {
+      const secret = label.includes('password')
+      const answer = promptTerminal(label, secret,
+        tty.input as unknown as ReadStream, tty.output as unknown as WriteStream)
+      expect(tty.text()).toContain(label)
+      tty.input.write(`${value}\r`)
+      expect(await answer).toBe(value)
+    }
+    expect(tty.text()).not.toContain(' pasted e\u0301 password ')
+    expect(tty.input.setRawMode.mock.calls.at(-1)).toEqual([false])
+    expect(tty.input.listenerCount('keypress')).toBe(0)
+  })
+
+  it('restores a previously raw terminal after secret input fails', async () => {
+    const tty = terminal()
+    Object.assign(tty.input, { isRaw: true })
+    const answer = tty.ask()
+    tty.input.emit('error', new Error('private transport detail'))
+    await expect(answer).rejects.toThrow('Input closed.')
+    expect(tty.input.setRawMode.mock.calls).toEqual([[true], [true]])
+    expect(tty.input.listenerCount('keypress')).toBe(0)
+    expect(tty.text()).toBe('Temporary password: \n')
   })
 
   it('refuses non-TTY input or output before reading', async () => {
