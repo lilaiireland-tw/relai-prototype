@@ -7,6 +7,7 @@ export interface UserRow {
   display_name: string
   password_salt: string
   password_digest: string
+  must_change_password: boolean
   role: string
   is_active: SqlBoolean
   cohort_source: string | null
@@ -15,11 +16,15 @@ export interface UserRow {
   last_login_at: string | null
 }
 
-export type CreateUserInput = Omit<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at'> &
-  Partial<Pick<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at'>>
+export type CreateUserInput = Omit<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at' | 'must_change_password'> &
+  Partial<Pick<UserRow, 'role' | 'is_active' | 'cohort_source' | 'last_login_at' | 'must_change_password'>>
+
+/** Already derived credentials; identity must come from the authenticated service. */
+export type UpdateCredentialInput = Pick<UserRow,
+  'password_salt' | 'password_digest' | 'must_change_password' | 'updated_at'>
 
 /** Account-management projection: credentials never leave the repository. */
-export type AdminAccountRow = Omit<UserRow, 'password_salt' | 'password_digest'>
+export type AdminAccountRow = Omit<UserRow, 'password_salt' | 'password_digest' | 'must_change_password'>
 
 declare const tokenDigestBrand: unique symbol
 export type TokenDigest = string & { readonly [tokenDigestBrand]: true }

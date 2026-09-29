@@ -14,10 +14,13 @@ results rather than returning an empty success.
 - Keep SQL in repository modules. Use fixed column lists and prepared statements
   with every input passed through `bind`; interpolate only private static SQL
   fragments such as column lists. Never interpolate client values or identifiers.
-- Row shapes match the approved migration: snake_case, integer booleans (`0 | 1`),
+- Row shapes use snake_case and integer booleans (`0 | 1`) for existing fields,
   UTC ISO-8601 text timestamps and explicit nullable fields. Callers supply IDs,
   normalized usernames, timestamps and already derived credentials. No password
   hashing, normalization or clock policy is implemented here.
+  Issue #47 exposes `must_change_password` as a boolean, converting the stored
+  D1 integer explicitly on create and both user lookups. Omitted create flags
+  default to false; callers may explicitly choose true or false.
 - `role` is unrestricted `string` with a create default of `'user'`;
   `cohort_source` is `string | null`. These approved TEXT columns have no
   persistence-level enums or additional schema constraints.
@@ -55,7 +58,14 @@ There is no Wrangler configuration, persistent state, credential, remote databas
 or production dependency. Failure-result tests use a deterministic fake transport.
 The adapter verifies SQLite SQL behavior, not Cloudflare runtime/network behavior.
 
-The schema stays unchanged. Follow [the migration runbook](d1-migrations.md) for
-future assigned schema tasks; tests never apply a remote migration.
+Issue #47 adds `0002_add_users_must_change_password.sql` without changing the
+initial migration. Existing accounts receive `0` (false).
+`users.updateCredential(authenticatedUserId, input)` updates salt, digest,
+`must_change_password` and `updated_at` in one bound UPDATE; the service must
+supply authenticated identity and already derived credentials. It accepts no
+plaintext password and performs no crypto. The legacy `replaceCredential`
+operation preserves the flag and current admin CLI behavior. Account listings
+and public auth projections retain their existing safe fields.
+Follow [the migration runbook](d1-migrations.md); tests never apply remotely.
 
 API reference: [Cloudflare prepared statements](https://developers.cloudflare.com/d1/worker-api/prepared-statements/).

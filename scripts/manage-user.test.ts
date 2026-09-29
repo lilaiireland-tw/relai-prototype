@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRepositories, tokenDigest } from '../src/worker/persistence'
@@ -37,7 +37,9 @@ describe('offline admin account management', () => {
     vi.stubEnv('AUTH_PEPPER', crypto.randomUUID())
     for (const method of logs) vi.spyOn(console, method).mockImplementation(() => {})
     sqlite = new DatabaseSync(':memory:')
-    sqlite.exec(readFileSync('migrations/0001_initial_core_schema.sql', 'utf8'))
+    for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()) {
+      sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
+    }
     db = localD1(sqlite)
     repositories = createRepositories(db)
   })

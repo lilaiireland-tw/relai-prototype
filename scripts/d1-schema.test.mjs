@@ -8,7 +8,7 @@ import { env, execPath } from 'node:process'
 import { schemaSql, verifyCoreSchema } from './d1-schema-verification.mjs'
 
 // Explicit operator-only test: never wired into CI/CD or ordinary deploy scripts.
-test('initial schema matches PRD on clean local D1 and Wrangler applies it only once', { timeout: 180000 }, () => {
+test('core schema and password-change state match approved migrations on clean local D1 and Wrangler applies it only once', { timeout: 180000 }, () => {
   const persistence = mkdtempSync(join(tmpdir(), 'relai-24-d1-'))
   const run = (command, args = []) => {
     const result = spawnSync(execPath, [resolve('node_modules/wrangler/bin/wrangler.js'),
@@ -25,7 +25,9 @@ test('initial schema matches PRD on clean local D1 and Wrangler applies it only 
     .flatMap((response) => response.results)
   const schema = () => query(schemaSql)
   assert.deepEqual(schema(), [], 'Fresh persistence must contain no application schema')
-  assert.match(run(['migrations', 'apply']), /0001_initial_core_schema.sql/)
+  const applied = run(['migrations', 'apply'])
+  assert.match(applied, /0001_initial_core_schema.sql/)
+  assert.match(applied, /0002_add_users_must_change_password.sql/)
 
   const metadata = new Map()
   const { schema: initialSchema, history } = verifyCoreSchema((sql) => {
