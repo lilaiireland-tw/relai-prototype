@@ -1,4 +1,4 @@
-import { digestSessionToken, generateSessionToken, verifyPassword, type RawSessionToken } from '../auth/crypto'
+import { createPasswordCredential, digestSessionToken, generateSessionToken, verifyPassword, type RawSessionToken } from '../auth/crypto'
 import { sessionLifetimeSeconds } from '../auth/session'
 import type { SafeUser } from '../auth/types'
 import type { createRepositories, UserRow } from '../persistence'
@@ -13,7 +13,8 @@ const syntheticCredential = {
 }
 
 function safeUser(user: UserRow): SafeUser {
-  return { id: user.id, username: user.username, display_name: user.display_name, role: user.role }
+  return { id: user.id, username: user.username, display_name: user.display_name, role: user.role,
+    must_change_password: user.must_change_password }
 }
 
 export function createAuthService(repositories: Repositories) {
@@ -63,6 +64,18 @@ export function createAuthService(repositories: Repositories) {
 
     async logout(token: RawSessionToken) {
       await sessions.revokeByTokenDigest(await digestSessionToken(token))
+    },
+
+    async changePassword(authenticatedUserId: string, currentPassword: string, newPassword: string, authPepper: string) {
+      if (typeof authPepper !== 'string' || authPepper.length === 0) throw new Error('Auth configuration unavailable.')
+      const user = await users.findById(authenticatedUserId)
+      if (!user || user.is_active !== 1) return null
+      if (!await verifyPassword(currentPassword, user, authPepper)) return null
+      const credential = await createPasswordCredential(newPassword, authPepper)
+      const updated = await users.changeCredential(authenticatedUserId, user.password_digest, { ...credential,
+        must_change_password: false, updated_at: new Date().toISOString() })
+      if (updated.changes !== 1) return null
+      return { ...safeUser(user), must_change_password: false }
     },
   }
 }

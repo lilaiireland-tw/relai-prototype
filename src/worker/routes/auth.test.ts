@@ -6,7 +6,7 @@ import { Hono } from 'hono'
 import { createApp } from '../index'
 import * as authCrypto from '../auth/crypto'
 import type { AuthEnv } from '../auth/types'
-import { requireAuth } from '../middleware/auth'
+import { requireAuth, requirePasswordChanged } from '../middleware/auth'
 import { createRepositories } from '../persistence'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 
@@ -29,7 +29,7 @@ const at = '2026-09-29T10:00:00.000Z'
 const expiry = '2026-10-06T10:00:00.000Z'
 const password = ' synthetic password\u0000愛🍀 '
 const testPepper = 'offline-synthetic-binding'
-const profile = { id: 'synthetic-user', username: 'Beta', display_name: 'Beta Test', role: 'user' }
+const profile = { id: 'synthetic-user', username: 'Beta', display_name: 'Beta Test', role: 'user', must_change_password: false }
 const invalidCredentials = { error: { code: 'INVALID_CREDENTIALS', message: '登入資訊不正確。' } }
 const unauthorized = { error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } }
 const serverError = { error: { code: 'INTERNAL_SERVER_ERROR', message: 'Internal server error.' } }
@@ -74,6 +74,11 @@ describe('closed-beta auth API', () => {
   function login(body: unknown = { username: profile.username, password }, protocol = 'https') {
     return request('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body) }, protocol)
+  }
+  function changePassword(body: unknown, sessionCookie?: string) {
+    return request('/auth/change-password?user_id=another-user', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(sessionCookie ? { Cookie: sessionCookie } : {}) },
+      body: JSON.stringify(body) })
   }
   function cookie(response: Response) { return response.headers.get('set-cookie')!.split(';')[0] }
   function tokenFrom(response: Response) { return authCrypto.rawSessionToken(cookie(response).slice('relai_session='.length)) }
@@ -120,11 +125,111 @@ describe('closed-beta auth API', () => {
       must_change_password: true, updated_at: at })
     const response = await login()
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ user: profile })
+    expect(await response.json()).toEqual({ user: { ...profile, must_change_password: true } })
     const me = await request('/auth/me', { headers: { Cookie: cookie(response) } })
     expect(me.status).toBe(200)
-    expect(await me.json()).toEqual({ user: profile })
+    expect(await me.json()).toEqual({ user: { ...profile, must_change_password: true } })
     expect(await repositories.users.findById(profile.id)).toMatchObject({ must_change_password: true })
+  })
+
+  it('changes only the session user credential with fresh salt and clears the required flag', async () => {
+    await repositories.users.updateCredential(profile.id, { ...credential,
+      must_change_password: true, updated_at: at })
+    await repositories.users.create({ ...profile, id: 'another-user', username: 'Other', ...credential,
+      created_at: at, updated_at: at })
+    const loggedIn = await login()
+    const originalSession = await sessionFrom(loggedIn)
+    const nextPassword = ' new pass\u0000愛🍀 '
+    const response = await changePassword({ current_password: password, new_password: nextPassword,
+      user_id: 'another-user', password_salt: 'attacker', must_change_password: true }, cookie(loggedIn))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ user: { ...profile, must_change_password: false } })
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const updated = await repositories.users.findById(profile.id)
+    expect(updated).toMatchObject({ must_change_password: false, updated_at: at })
+    expect(updated!.password_salt).not.toBe(credential.password_salt)
+    expect(updated!.password_digest).not.toBe(credential.password_digest)
+    expect(await authCrypto.verifyPassword(nextPassword, updated!, testPepper)).toBe(true)
+    expect(await authCrypto.verifyPassword(nextPassword.trim(), updated!, testPepper)).toBe(false)
+    expect(await repositories.users.findById('another-user')).toMatchObject({ ...credential, must_change_password: false })
+    expect(await sessionFrom(loggedIn)).toEqual({ ...originalSession, last_seen_at: at })
+    const me = await request('/auth/me', { headers: { Cookie: cookie(loggedIn) } })
+    expect(await me.json()).toEqual({ user: { ...profile, must_change_password: false } })
+    expect((await login({ username: profile.username, password })).status).toBe(401)
+    expect((await login({ username: profile.username, password: nextPassword })).status).toBe(200)
+    for (const secret of [password, nextPassword, testPepper, updated!.password_salt, updated!.password_digest]) {
+      expect(JSON.stringify([...response.headers])).not.toContain(secret)
+    }
+  })
+
+  it('rejects wrong current password without changing credentials', async () => {
+    const loggedIn = await login()
+    const response = await changePassword({ current_password: 'wrong', new_password: 'new-password' }, cookie(loggedIn))
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid current password.' } })
+    expect(await repositories.users.findById(profile.id)).toMatchObject(credential)
+  })
+
+  it.each([undefined, 'relai_session=invalid'])('requires a valid session for password change', async sessionCookie => {
+    const response = await changePassword({ current_password: password, new_password: 'new-password' }, sessionCookie)
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual(unauthorized)
+    expect(await repositories.users.findById(profile.id)).toMatchObject(credential)
+  })
+
+  it('rejects disabled users even with an existing session', async () => {
+    const loggedIn = await login()
+    await repositories.users.setActive(profile.id, 0, at)
+    const response = await changePassword({ current_password: password, new_password: 'new-password' }, cookie(loggedIn))
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual(unauthorized)
+    expect(await repositories.users.findById(profile.id)).toMatchObject(credential)
+  })
+
+  it.each([{}, { current_password: password }, { current_password: password, new_password: '1234567' },
+    { current_password: '', new_password: 'new-password' },
+    { current_password: password, new_password: 12345678 }])('validates password-change input', async body => {
+    const loggedIn = await login()
+    const response = await changePassword(body, cookie(loggedIn))
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: { code: 'INVALID_INPUT', message: 'Invalid password change request.' } })
+    expect(await repositories.users.findById(profile.id)).toMatchObject(credential)
+  })
+
+  it.each([
+    { name: 'seven ASCII code points', newPassword: '1234567', valid: false },
+    { name: 'seven code points including astral emoji', newPassword: 'a😀😀😀😀😀😀', valid: false },
+    { name: 'four astral emoji despite eight UTF-16 units', newPassword: '😀😀😀😀', valid: false },
+    { name: 'eight ASCII code points', newPassword: '12345678', valid: true },
+    { name: 'eight code points including astral emoji', newPassword: 'a😀😀😀😀😀😀😀', valid: true },
+  ])('uses Unicode code points for the new-password minimum: $name', async ({ newPassword, valid }) => {
+    const loggedIn = await login()
+    const response = await changePassword({ current_password: password, new_password: newPassword }, cookie(loggedIn))
+    expect(response.status).toBe(valid ? 200 : 400)
+    const stored = await repositories.users.findById(profile.id)
+    if (valid) {
+      expect(await response.json()).toEqual({ user: profile })
+      expect(await authCrypto.verifyPassword(newPassword, stored!, testPepper)).toBe(true)
+      expect((await login({ username: profile.username, password })).status).toBe(401)
+    } else {
+      expect(await response.json()).toEqual({ error: { code: 'INVALID_INPUT', message: 'Invalid password change request.' } })
+      expect(stored).toMatchObject(credential)
+    }
+  })
+
+  it('offers a reusable onboarding guard without blocking auth endpoints', async () => {
+    const product = new Hono<AuthEnv>()
+    product.get('/ready', requireAuth, requirePasswordChanged, c => c.json({ id: c.get('user').id }))
+    app.route('/relaiapp/api/v1', product)
+    await repositories.users.updateCredential(profile.id, { ...credential, must_change_password: true, updated_at: at })
+    const loggedIn = await login()
+    expect((await request('/auth/me', { headers: { Cookie: cookie(loggedIn) } })).status).toBe(200)
+    const blocked = await request('/ready', { headers: { Cookie: cookie(loggedIn) } })
+    expect(blocked.status).toBe(403)
+    expect(await blocked.json()).toEqual({ error: { code: 'PASSWORD_CHANGE_REQUIRED', message: 'Password change required.' } })
+    expect((await changePassword({ current_password: password, new_password: 'new-password' }, cookie(loggedIn))).status).toBe(200)
+    expect((await request('/ready', { headers: { Cookie: cookie(loggedIn) } })).status).toBe(200)
   })
 
   it('preserves username and password exactly and ignores client authorization fields', async () => {

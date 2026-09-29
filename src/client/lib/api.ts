@@ -7,7 +7,7 @@ export function apiUrl(path: ApiPath): string {
 }
 
 export interface HealthResponse { status: 'ok' }
-export interface AuthUser { id: string; username: string; display_name: string; role: string }
+export interface AuthUser { id: string; username: string; display_name: string; role: string; must_change_password: boolean }
 export interface AuthResponse { user: AuthUser }
 export interface LoginInput { username: string; password: string }
 
@@ -18,8 +18,10 @@ function decodeAuth(value: unknown): AuthResponse {
     !('id' in user) || typeof user.id !== 'string' ||
     !('username' in user) || typeof user.username !== 'string' ||
     !('display_name' in user) || typeof user.display_name !== 'string' ||
-    !('role' in user) || typeof user.role !== 'string') throw new Error('Invalid user')
-  return { user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role } }
+    !('role' in user) || typeof user.role !== 'string' ||
+    !('must_change_password' in user) || typeof user.must_change_password !== 'boolean') throw new Error('Invalid user')
+  return { user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role,
+    must_change_password: user.must_change_password } }
 }
 export class ApiError extends Error {
   constructor(

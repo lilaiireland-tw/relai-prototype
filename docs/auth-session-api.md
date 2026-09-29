@@ -4,9 +4,10 @@ The Hono Worker exposes these same-origin endpoints under `/relaiapp/api/v1`:
 
 | Method/path | Request | Success |
 | --- | --- | --- |
-| `POST /auth/login` | JSON `{ username, password }`, nonempty strings with exact contents preserved | 200 `{ user: { id, username, display_name, role } }` and session cookie |
+| `POST /auth/login` | JSON `{ username, password }`, nonempty strings with exact contents preserved | 200 `{ user: { id, username, display_name, role, must_change_password } }` and session cookie |
 | `GET /auth/me` | Browser session cookie | 200 with the same safe, current user projection |
 | `POST /auth/logout` | Optional browser session cookie | Empty 204 and cleared cookie |
+| `POST /auth/change-password` | Authenticated JSON `{ current_password, new_password }` | 200 with the safe user projection and `must_change_password: false` |
 
 Zod rejects malformed bodies with fixed `INVALID_INPUT` JSON (400). Wrong
 password, nonexistent username and disabled user produce identical
@@ -49,6 +50,26 @@ successful server-side revocation.
 Auth responses use `Cache-Control: no-store`. No credential, raw body, token,
 digest or binding is logged. The only raw token response location is login's
 Set-Cookie. `DB` and `AUTH_PEPPER` types remain server-side; health remains public.
+
+## Self-service password change (Issue #49)
+
+`POST /relaiapp/api/v1/auth/change-password` requires the current session. It
+uses only the session user ID, re-verifies the exact current password, and requires
+the new password to contain at least eight Unicode code points. No trimming or
+Unicode normalization occurs. The Worker creates a fresh salt and v1 digest with the
+server-side pepper, replaces the current credential, and clears the required
+change flag. The current seven-day session remains valid. The credential update
+is conditional on the old digest and active account state, so a concurrent reset
+or disable cannot be overwritten.
+
+Missing or invalid sessions receive `UNAUTHORIZED` (401); an incorrect current
+password receives `INVALID_CREDENTIALS` (401); invalid JSON or password fields
+receive `INVALID_INPUT` (400). The response contains only the safe user projection.
+Login and `/auth/me` expose `must_change_password` as a boolean. Product APIs
+can apply `requireAuth` followed by `requirePasswordChanged`; the latter rejects
+an authenticated user still requiring a change with `PASSWORD_CHANGE_REQUIRED`
+(403). Auth endpoints remain available during onboarding. The frontend change
+form and product route enforcement belong to a later task.
 
 ## Validation and scope
 

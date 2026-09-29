@@ -3,7 +3,7 @@ import { apiUrl, createApiClient } from './api'
 import { createApp } from '../../worker'
 
 describe('same-origin client API', () => {
-  const user = { id: 'u1', username: 'Exact User', display_name: 'Alex', role: 'user' }
+  const user = { id: 'u1', username: 'Exact User', display_name: 'Alex', role: 'user', must_change_password: false }
   it('uses the typed auth contract and preserves credentials exactly', async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ user, token: 'must-discard' }))
     const client = createApiClient(transport)
@@ -22,7 +22,9 @@ describe('same-origin client API', () => {
   it('projects only safe user fields and rejects invalid auth responses', async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ user: { ...user, password: 'private', token: 'private' } }))
     await expect(createApiClient(transport).me()).resolves.toEqual({ user })
-    for (const value of [null, {}, { user: null }, { user: { ...user, id: 42 } }]) {
+    for (const value of [null, {}, { user: null }, { user: { ...user, id: 42 } },
+      { user: { ...user, must_change_password: 'false' } },
+      { user: { ...user, must_change_password: undefined } }]) {
       transport.mockResolvedValue(Response.json(value))
       await expect(createApiClient(transport).me()).rejects.toMatchObject({ kind: 'invalid-response' })
     }
