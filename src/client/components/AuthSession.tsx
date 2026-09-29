@@ -10,6 +10,7 @@ const AuthSession = createContext<{
  notice: string
  retry: () => Promise<void>
  login: (username: string, password: string) => Promise<void>
+ changePassword: (currentPassword: string, newPassword: string) => Promise<void>
  logout: () => Promise<void>
 } | null>(null)
 
@@ -52,11 +53,27 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     if (current !== generation.current) return
     setNotice('')
     setState({ status: 'authenticated', user })
-    void navigate('/home', { replace: true })
+    void navigate(user.must_change_password ? '/change-password' : '/home', { replace: true })
    } catch (error) {
     if (current === generation.current) setState({ status: 'unauthenticated', user: null })
     throw error
    }
+  },
+  async changePassword(currentPassword, newPassword) {
+   const current = generation.current
+   await apiClient.changePassword({ current_password: currentPassword, new_password: newPassword })
+   if (current !== generation.current) return
+   setState({ status: 'loading', user: null })
+   let user: AuthUser
+   try { ({ user } = await apiClient.me()) }
+   catch (error) {
+    if (current === generation.current) setState({ status: error instanceof ApiError && error.status === 401 ? 'unauthenticated' : 'error', user: null })
+    throw error
+   }
+   if (current !== generation.current) return
+   setState({ status: 'authenticated', user })
+   if (user.must_change_password) throw new Error('Password change was not confirmed')
+   void navigate('/home', { replace: true })
   },
   async logout() {
    const current = ++generation.current
@@ -87,4 +104,9 @@ export function RequireAuth() {
  </section>
  if (state.status === 'unauthenticated') return <Navigate to="/login" replace />
  return <Outlet />
+}
+export function RequirePasswordChanged() {
+ const { state } = useAuthSession()
+ if (state.status !== 'authenticated') return null
+ return state.user.must_change_password ? <Navigate to="/change-password" replace /> : <Outlet />
 }

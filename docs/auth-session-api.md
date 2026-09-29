@@ -69,7 +69,7 @@ Login and `/auth/me` expose `must_change_password` as a boolean. Product APIs
 can apply `requireAuth` followed by `requirePasswordChanged`; the latter rejects
 an authenticated user still requiring a change with `PASSWORD_CHANGE_REQUIRED`
 (403). Auth endpoints remain available during onboarding. The frontend change
-form and product route enforcement belong to a later task.
+form and product route enforcement are implemented in Issue #50.
 
 ## Validation and scope
 
@@ -109,3 +109,21 @@ Staging account validation remains the separate Issue #43.
 
 This integration adds no signup, recovery, JWT, Bearer/localStorage auth, product
 APIs, migrations, backend session-policy or infrastructure changes.
+
+## Password-change UI (Issue #50)
+
+`/relaiapp/change-password` is available to any authenticated user. Settings
+links to it for voluntary changes. Login and session bootstrap use the safe
+`must_change_password` boolean to redirect required-change accounts away from
+Home, cards, error log, stats and settings. The form collects the current
+password, a new password and confirmation. It checks the eight-code-point
+minimum and exact confirmation match before posting only `current_password` and
+`new_password` through the same-origin client. All three inputs clear on
+submission. A wrong current password leaves the session intact; an expired
+session is resolved through `/auth/me`. After success, `/auth/me` refreshes the
+safe user state before Home is shown. Credentials and tokens are never written
+to browser storage or application logs; the cookie remains browser managed.
+
+Offline client tests use synthetic responses. Staging migration, real account
+provisioning and browser validation remain pending until after merge and explicit
+Product Owner authorization.

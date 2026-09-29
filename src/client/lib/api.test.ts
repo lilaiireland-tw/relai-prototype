@@ -4,6 +4,17 @@ import { createApp } from '../../worker'
 
 describe('same-origin client API', () => {
   const user = { id: 'u1', username: 'Exact User', display_name: 'Alex', role: 'user', must_change_password: false }
+  it('posts only password-change fields and retains auth on a wrong current password', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 401 }))
+    const client = createApiClient(transport)
+    const unauthorized = vi.fn()
+    client.onUnauthorized(unauthorized)
+    await expect(client.changePassword({ current_password: ' old ', new_password: ' new-value ' })).rejects.toMatchObject({ status: 401 })
+    expect(transport).toHaveBeenCalledWith('/relaiapp/api/v1/auth/change-password', expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', body: JSON.stringify({ current_password: ' old ', new_password: ' new-value ' }),
+    }))
+    expect(unauthorized).not.toHaveBeenCalled()
+  })
   it('uses the typed auth contract and preserves credentials exactly', async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ user, token: 'must-discard' }))
     const client = createApiClient(transport)
