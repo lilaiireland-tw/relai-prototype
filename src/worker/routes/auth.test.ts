@@ -197,6 +197,27 @@ describe('closed-beta auth API', () => {
     expect(await repositories.users.findById(profile.id)).toMatchObject(credential)
   })
 
+  it.each([
+    { name: 'seven ASCII code points', newPassword: '1234567', valid: false },
+    { name: 'seven code points including astral emoji', newPassword: 'a😀😀😀😀😀😀', valid: false },
+    { name: 'four astral emoji despite eight UTF-16 units', newPassword: '😀😀😀😀', valid: false },
+    { name: 'eight ASCII code points', newPassword: '12345678', valid: true },
+    { name: 'eight code points including astral emoji', newPassword: 'a😀😀😀😀😀😀😀', valid: true },
+  ])('uses Unicode code points for the new-password minimum: $name', async ({ newPassword, valid }) => {
+    const loggedIn = await login()
+    const response = await changePassword({ current_password: password, new_password: newPassword }, cookie(loggedIn))
+    expect(response.status).toBe(valid ? 200 : 400)
+    const stored = await repositories.users.findById(profile.id)
+    if (valid) {
+      expect(await response.json()).toEqual({ user: profile })
+      expect(await authCrypto.verifyPassword(newPassword, stored!, testPepper)).toBe(true)
+      expect((await login({ username: profile.username, password })).status).toBe(401)
+    } else {
+      expect(await response.json()).toEqual({ error: { code: 'INVALID_INPUT', message: 'Invalid password change request.' } })
+      expect(stored).toMatchObject(credential)
+    }
+  })
+
   it('offers a reusable onboarding guard without blocking auth endpoints', async () => {
     const product = new Hono<AuthEnv>()
     product.get('/ready', requireAuth, requirePasswordChanged, c => c.json({ id: c.get('user').id }))

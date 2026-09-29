@@ -7,7 +7,10 @@ import { createRepositories } from '../persistence'
 import { createAuthService } from '../services/auth'
 
 const loginInput = z.object({ username: z.string().min(1), password: z.string().min(1) })
-const changePasswordInput = z.object({ current_password: z.string().min(1), new_password: z.string().min(8) })
+const changePasswordInput = z.object({
+  current_password: z.string().min(1),
+  new_password: z.string().refine(password => Array.from(password).length >= 8),
+})
 export const auth = new Hono<AuthEnv>()
 
 auth.use('*', async (c, next) => {

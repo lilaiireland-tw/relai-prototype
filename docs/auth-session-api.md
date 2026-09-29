@@ -55,8 +55,8 @@ Set-Cookie. `DB` and `AUTH_PEPPER` types remain server-side; health remains publ
 
 `POST /relaiapp/api/v1/auth/change-password` requires the current session. It
 uses only the session user ID, re-verifies the exact current password, and requires
-the new password to contain at least eight characters. No trimming or Unicode
-normalization occurs. The Worker creates a fresh salt and v1 digest with the
+the new password to contain at least eight Unicode code points. No trimming or
+Unicode normalization occurs. The Worker creates a fresh salt and v1 digest with the
 server-side pepper, replaces the current credential, and clears the required
 change flag. The current seven-day session remains valid. The credential update
 is conditional on the old digest and active account state, so a concurrent reset
