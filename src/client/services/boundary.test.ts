@@ -34,7 +34,10 @@ it('centralizes all client fetch calls in the API module, never components or pa
       const path = join(directory, entry.name)
       if (entry.isDirectory()) { inspect(path); continue }
       if (!/\.tsx?$/.test(entry.name) || entry.name.endsWith('.test.ts')) continue
-      const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
+      const text = readFileSync(path, 'utf8')
+      expect(text).not.toMatch(/localStorage|sessionStorage|indexedDB|document\.cookie|\bBearer\b|\bJWT\b|Authorization/)
+      expect(text).not.toMatch(/DemoSession/)
+      const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
       function visit(node: ts.Node) {
         if (ts.isCallExpression(node)) {
           const callee = node.expression

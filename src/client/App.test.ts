@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRouter } from './App'
 import { clientData } from './services/data'
 
+const user = { id: 'test-user', username: 'Alex', display_name: 'Alex', role: 'user' }
+const authResponse = () => Response.json({ user })
+
 describe('migrated client under /relaiapp', () => {
   let container: HTMLDivElement
   let root: Root
   beforeEach(() => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     vi.stubEnv('BASE_URL', '/relaiapp/')
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => Response.json({ status: 'ok' })))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => url.endsWith('/auth/logout') ? new Response(null, { status: 204 }) : url.includes('/auth/') ? authResponse() : Response.json({ status: 'ok' })))
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
@@ -41,6 +44,114 @@ describe('migrated client under /relaiapp', () => {
       field.dispatchEvent(new Event('input', { bubbles: true }))
     })
   }
+  it.each(['home', 'cards', 'flashcards', 'error-log', 'stats', 'settings'])('redirects unauthenticated %s, including aliases', async path => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }))
+    await renderAt(`/relaiapp/${path}`)
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).toContain('登入你的帳號')
+    expect(container.textContent).not.toContain('serendipity')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('does not mount protected content or load product data during bootstrap', async () => {
+    let resolveMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementation(() => new Promise(resolve => { resolveMe = resolve }))
+    const product = vi.spyOn(clientData, 'getHome')
+    await renderAt('/relaiapp/home')
+    expect(container.textContent).toContain('正在確認登入狀態')
+    expect(container.textContent).not.toContain('今日進度')
+    expect(product).not.toHaveBeenCalled()
+    await act(() => resolveMe(new Response(null, { status: 401 })))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(product).not.toHaveBeenCalled()
+  })
+  it.each([
+    () => Promise.reject(new Error('private network detail')),
+    async () => new Response('private server detail', { status: 503 }),
+    async () => Response.json({ user: { username: 'incomplete' } }),
+  ])('fails closed on bootstrap failure and supports retry', async failure => {
+    vi.mocked(fetch).mockImplementationOnce(failure)
+    await renderAt('/relaiapp/home')
+    expect(container.textContent).toContain('無法確認登入狀態')
+    expect(container.textContent).not.toMatch(/private|serendipity|今日進度/)
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    await click(button('重試'))
+    expect(container.textContent).toContain('今日進度')
+    expect(container.textContent).toContain('Alex')
+  })
+  it.each([401, 503])('shows safe login failure for HTTP %s and clears the password', async status => {
+    vi.mocked(fetch).mockResolvedValue(new Response('username exists; private detail', { status }))
+    await renderAt('/relaiapp/login')
+    await input('username', 'Exact User')
+    await input('password', 'Secret')
+    await act(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).toContain(status === 401 ? '登入資訊不正確。' : '登入服務暫時無法使用')
+    expect(container.textContent).not.toMatch(/username exists|private detail|Secret/)
+    expect(container.querySelector<HTMLInputElement>('input[name="password"]')?.value).toBe('')
+  })
+  it('returns to login when a restored session expires on app focus', async () => {
+    await renderAt('/relaiapp/home')
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).not.toContain('今日進度')
+  })
+  it('clears auth when centralized transport receives a session 401', async () => {
+    await renderAt('/relaiapp/home')
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }))
+    const { apiClient } = await import('./lib/api')
+    await act(async () => { await expect(apiClient.getHealth()).rejects.toMatchObject({ status: 401 }) })
+    expect(window.location.pathname).toBe('/relaiapp/login')
+  })
+  it('clears local state after logout failure without claiming server revocation', async () => {
+    await renderAt('/relaiapp/home')
+    vi.mocked(fetch).mockRejectedValue(new Error('private'))
+    await click(button('登出'))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).toContain('無法確認伺服器登出')
+    expect(container.textContent).not.toContain('private')
+  })
+  it('does not let a stale bootstrap overwrite a successful login', async () => {
+    let resolveMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me')
+      ? new Promise(resolve => { resolveMe = resolve })
+      : Promise.resolve(String(url).endsWith('/auth/login') ? authResponse() : Response.json({ status: 'ok' })))
+    await renderAt('/relaiapp/login')
+    await input('username', 'Alex')
+    await input('password', 'Secret')
+    await act(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await act(() => resolveMe(new Response(null, { status: 401 })))
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    expect(container.textContent).toContain('今日進度')
+  })
+  it('waits for logout before redirecting and hides protected content meanwhile', async () => {
+    await renderAt('/relaiapp/home')
+    let resolveLogout!: (response: Response) => void
+    vi.mocked(fetch).mockImplementation(() => new Promise(resolve => { resolveLogout = resolve }))
+    await click(button('登出'))
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    expect(container.textContent).toContain('正在確認登入狀態')
+    expect(container.textContent).not.toContain('今日進度')
+    await act(() => resolveLogout(new Response(null, { status: 204 })))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+  })
+  it('does not leave auth unresolved after login fails during bootstrap', async () => {
+    let resolveMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me')
+      ? new Promise(resolve => { resolveMe = resolve })
+      : Promise.resolve(new Response(null, { status: 401 })))
+    await renderAt('/relaiapp/login')
+    await input('username', 'Alex')
+    await input('password', 'Secret')
+    await act(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await act(() => resolveMe(authResponse()))
+    await act(() => {
+      window.history.replaceState(null, '', '/relaiapp/home')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).not.toContain('正在確認登入狀態')
+  })
   it.each(['/relaiapp', '/relaiapp/'])('renders splash at %s', async path => {
     await renderAt(path)
     expect(container.textContent).toContain('你的 AI 英語第二大腦')
@@ -56,34 +167,42 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain(content)
     if (['cards', 'flashcards', 'error-log'].includes(path)) {
       expect(container.querySelector('[data-source="mock"]')?.textContent).toContain('模擬資料')
-      expect(fetch).not.toHaveBeenCalled()
+      expect(fetch).toHaveBeenCalledWith('/relaiapp/api/v1/auth/me', expect.objectContaining({ credentials: 'same-origin' }))
     }
     if (path === 'flashcards') expect(window.location.pathname).toBe('/relaiapp/cards')
   })
-  it('runs demo login/logout with only real health transport and no credential storage', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  it('logs in with exact credentials and logs out without credential storage', async () => {
     const storageSpy = vi.spyOn(Storage.prototype, 'setItem')
-    await renderAt('/relaiapp/')
-    await click(container.querySelector('a'))
-    expect(window.location.pathname).toBe('/relaiapp/login')
-    expect(container.querySelector('input[type="email"]')).toBeNull()
-    expect(container.querySelector('input[name="password"]')?.getAttribute('type')).toBe('password')
-    await input('username', 'Demo Alex')
-    await input('password', 'dummy')
-    expect(fetchSpy).not.toHaveBeenCalled()
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      if (String(url).endsWith('/auth/me')) return new Response(null, { status: 401 })
+      if (String(url).endsWith('/auth/logout')) return new Response(null, { status: 204 })
+      if (String(url).endsWith('/auth/login')) return authResponse()
+      return Response.json({ status: 'ok' })
+    })
+    await renderAt('/relaiapp/login')
+    await input('username', ' Alex ')
+    await input('password', ' Dummy SECRET ')
     await act(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(fetch).toHaveBeenCalledWith('/relaiapp/api/v1/auth/login', expect.objectContaining({
+      method: 'POST', credentials: 'same-origin', body: JSON.stringify({ username: ' Alex ', password: ' Dummy SECRET ' }),
+    }))
     expect(window.location.pathname).toBe('/relaiapp/home')
-    expect(container.textContent).toContain('Demo Alex')
+    expect(container.textContent).toContain('Alex')
     expect(container.textContent).toContain('serendipity')
     expect(container.textContent).toContain('已完成 6 次複習')
-    expect(container.textContent).toContain('126')
     expect(container.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('60')
     await click(button('登出'))
+    expect(fetch).toHaveBeenCalledWith('/relaiapp/api/v1/auth/logout', expect.objectContaining({ method: 'POST' }))
     expect(window.location.pathname).toBe('/relaiapp/login')
     expect(container.querySelector<HTMLInputElement>('input[name="password"]')?.value).toBe('')
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    expect(fetchSpy).toHaveBeenCalledWith('/relaiapp/api/v1/health', expect.objectContaining({ credentials: 'same-origin' }))
     expect(storageSpy).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+    await act(() => {
+      window.history.replaceState(null, '', '/relaiapp/home')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(window.location.pathname).toBe('/relaiapp/login')
   })
   it('navigates with React Router and responds to history changes under basename', async () => {
     await renderAt('/relaiapp/home')
@@ -151,7 +270,7 @@ describe('migrated client under /relaiapp', () => {
   })
   it('shows real health loading/success while product data remains mock', async () => {
     let resolveHealth!: (value: Response) => void
-    vi.mocked(fetch).mockImplementation(() => new Promise<Response>(resolve => { resolveHealth = resolve }))
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : new Promise<Response>(resolve => { resolveHealth = resolve }))
     await renderAt('/relaiapp/home')
     const healthPanel = container.querySelector('[aria-label="Worker 連線"]')!
     expect(healthPanel.getAttribute('data-source')).toBe('api')
@@ -169,7 +288,12 @@ describe('migrated client under /relaiapp', () => {
     async () => new Response('private server detail', { status: 503 }),
     async () => Response.json({ status: 'down' }),
   ])('handles health failure independently and can retry the real request', async failure => {
-    vi.mocked(fetch).mockImplementationOnce(failure)
+    let failHealth = true
+    vi.mocked(fetch).mockImplementation(url => {
+      if (String(url).endsWith('/auth/me')) return Promise.resolve(authResponse())
+      if (failHealth) { failHealth = false; return failure() }
+      return Promise.resolve(Response.json({ status: 'ok' }))
+    })
     await renderAt('/relaiapp/home')
     expect(container.querySelector('[role="status"]')?.textContent).toContain('無法連線至服務')
     expect(container.textContent).not.toContain('private')
@@ -177,16 +301,16 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain('已完成 6 次複習')
     await click(button('重新檢查連線'))
     expect(container.querySelector('[role="status"]')?.textContent).toContain('health: ok')
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(3)
   })
   it('ignores a health result after navigating away from Home', async () => {
     let resolveHealth!: (value: Response) => void
-    vi.mocked(fetch).mockImplementation(() => new Promise<Response>(resolve => { resolveHealth = resolve }))
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : new Promise<Response>(resolve => { resolveHealth = resolve }))
     await renderAt('/relaiapp/home')
     await click(container.querySelector('nav a[href="/relaiapp/cards"]'))
     await act(() => resolveHealth(Response.json({ status: 'ok' })))
     expect(container.querySelector('[aria-label="Worker 連線"]')).toBeNull()
     expect(container.textContent).toContain('serendipity')
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })

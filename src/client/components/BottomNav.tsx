@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from "react-router";
 import { BookOpen, Home, Languages, LogOut } from "lucide-react";
 
-import { useDemoSession } from "./DemoSession";
+import { useAuthSession } from "./AuthSession";
 
 const tabs = [
   { key: "home", label: "首頁", href: "/home", icon: Home },
@@ -11,7 +11,7 @@ const tabs = [
 
 export default function BottomNav() {
   const pathname = useLocation().pathname;
-  const { logout } = useDemoSession();
+  const { logout } = useAuthSession();
 
   return (
     <nav aria-label="主要導覽" className="sticky bottom-0 z-10 flex border-t border-gray-100 bg-white px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
