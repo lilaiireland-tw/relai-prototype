@@ -1309,7 +1309,7 @@ public/
 docs/
 
 README.md
-ReLai_PRD_v3.1.md
+ReLai_PRD_v3.3.md
 package.json
 vite.config.ts
 wrangler.jsonc
@@ -1506,7 +1506,7 @@ Closed Beta 優先看：
 以：
 
 ```text
-ReLai_PRD_v3.1.md
+ReLai_PRD_v3.3.md
 ```
 
 為準。

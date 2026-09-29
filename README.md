@@ -36,7 +36,7 @@ docs/                操作與開發手冊
 public/              靜態資產路由設定
 wrangler.jsonc       Worker 與 D1 環境綁定
 vite.config.ts       Vite 基底路徑與 Cloudflare 建置環境選擇
-ReLai_PRD_v3.1.md   產品需求與後續階段設計
+ReLai_PRD_v3.3.md   產品需求與後續階段設計
 ```
 
 現有模組及其職責見[儲存庫結構說明](docs/structure.md)。
@@ -77,4 +77,4 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - 下一個產品階段：卡片、複習、統計與設定的真實資料持久化，尚未開始。
 - 後續階段：Gemini 擷取及 PWA／離線支援。
 
-產品行為以 [PRD](ReLai_PRD_v3.1.md) 為準；實作與部署以本 README 及相關操作手冊為準。個別任務範圍以指定的 GitHub Issue 或產品負責人指示為準。
+產品行為以 [PRD](ReLai_PRD_v3.3.md) 為準；實作與部署以本 README 及相關操作手冊為準。個別任務範圍以指定的 GitHub Issue 或產品負責人指示為準。

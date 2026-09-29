@@ -7,7 +7,7 @@ export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WH
 export function verifyCoreSchema(execute) {
   const query = (sql) => execute(sql).flatMap((response) => response.results)
   const schema = () => query(schemaSql)
-  const prd = readFileSync('ReLai_PRD_v3.1.md', 'utf8')
+  const prd = readFileSync('ReLai_PRD_v3.3.md', 'utf8')
   const section = prd.split('# 十二、Database Schema')[1].split('# 十三、Database')[0]
   const definitions = [...section.matchAll(/## `([^`]+)`\s+```text\s+([^`]+)```/g)]
   const tables = ['users', 'sessions', 'source_items', 'flashcards', 'review_events', 'user_stats', 'user_settings']

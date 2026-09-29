@@ -25,7 +25,7 @@ docs/                Operator and developer runbooks
 public/              Static asset redirect rules
 ```
 
-Root `package.json`, `vite.config.ts`, `wrangler.jsonc`, and `index.html` define the active build and runtime. `ReLai_PRD_v3.1.md` describes product requirements, including later phases.
+Root `package.json`, `vite.config.ts`, `wrangler.jsonc`, and `index.html` define the active build and runtime. `ReLai_PRD_v3.3.md` describes product requirements, including later phases.
 
 The Worker currently implements health, login, logout, session lookup and password change. D1 repositories currently cover users and sessions. Client card and error-log screens use mock data; stats and settings product screens are placeholders, though Settings links to the working password-change flow. No product data API or Gemini ingestion exists yet.
 
