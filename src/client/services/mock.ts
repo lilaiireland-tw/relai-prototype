@@ -75,7 +75,7 @@ const errors = [
 
 
 const metadata = {
-  user_id: 'demo-user', source_item_id: 'demo-source', source: 'user_input' as const,
+  user_id: 'demo-user', source_item_id: 'demo-source', source: 'user_input',
   is_favorite: false, last_reviewed_at: null, next_review_at: null,
   created_at: '2026-09-27T10:00:00Z', updated_at: '2026-09-27T10:00:00Z',
 };
