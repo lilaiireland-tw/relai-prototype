@@ -3,8 +3,11 @@
 `src/worker/persistence` is the v1 repository boundary. Construct
 `createRepositories(env.DB)` per request/service invocation. It accepts the
 structural subset of the Cloudflare D1 binding needed here (`prepare`, `bind`,
-`first`, `run`); no adapter, ORM, global binding or route SQL is required.
-Only users and sessions repositories are implemented in this task.
+`first`, `run`, `all`); no adapter, ORM, global binding or route SQL is required.
+Only users and sessions repositories are implemented. Issue #39 adds
+`users.listAccounts()`, a fixed safe-field projection for internal account
+management; it never selects credential salts or digests and rejects failed D1
+results rather than returning an empty success.
 
 ## Query conventions
 
