@@ -79,8 +79,8 @@ schema through an in-memory SQLite D1 transport. They test crypto paths, cookie
 policy, safe projections/errors, login cleanup, session revocation/expiry,
 last-seen without renewal, middleware reuse and API/client boundaries. They use
 no real accounts, secrets, remote D1 or persistent database. The transport does
-not reproduce Cloudflare network/runtime behavior; staging end-to-end validation
-belongs to the separately authorized follow-up task.
+not reproduce Cloudflare network/runtime behavior. Phase 3.5 staging end-to-end
+validation was completed separately; these offline tests do not repeat it.
 
 ## Frontend integration (Issue #42)
 

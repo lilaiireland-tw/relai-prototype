@@ -67,7 +67,7 @@ Do not use real accounts or remote databases for routine local validation.
 
 ## Delivery
 
-GitHub Actions runs PR quality checks only. Cloudflare Workers Builds owns automated staging deployment from `develop`; its configured commands are `npm run build:staging:validated` and `npm run deploy:staging:built`. The latter deploys the verified staging build and checks health. Production deployment remains a protected manual release path from `main`. D1 migrations are separately reviewed operator actions and are never applied by the CI or staging deploy commands. See [develop deployment](docs/develop-deployment.md) for configuration and the staging Worker cleanup procedure.
+GitHub Actions runs PR quality checks only. The repository-approved staging workflow assigns automated deployment from `develop` to Cloudflare Workers Builds, with `npm run build:staging:validated` and `npm run deploy:staging:built` as its commands. The latter deploys the verified staging build and checks health. The repository does not establish whether the live Cloudflare Dashboard Git connection is currently active; inspect its Builds and Deployments tabs for status. Production deployment remains a protected manual release path from `main`. D1 migrations are separately reviewed operator actions and are never applied by the CI or staging deploy commands. See [develop deployment](docs/develop-deployment.md) for configuration and the staging Worker cleanup procedure.
 
 ## Roadmap status
 

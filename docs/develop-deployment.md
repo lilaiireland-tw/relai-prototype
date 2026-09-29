@@ -10,8 +10,9 @@ Health: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/api/v
 
 ## Deployment ownership
 
-**Cloudflare Workers Builds / Git integration is the single automated staging
-deployment owner.** GitHub Actions runs only the existing PR quality checks in
+**The repository-approved automated staging deployment owner is Cloudflare
+Workers Builds / Git integration.** Verify its live connection and build status
+in the Cloudflare Dashboard. GitHub Actions runs only the existing PR quality checks in
 `.github/workflows/ci.yml`. No Actions workflow deploys this environment, and no
 GitHub staging environment or deployment secrets are required.
 
@@ -24,7 +25,8 @@ The repository supplies two commands for Cloudflare:
   a production build.
 
 Both use the locked local Wrangler. The config check rejects a production Worker,
-wrong/extra D1 bindings, disabled workers.dev and custom routes. The health check
+wrong/extra D1 bindings, disabled workers.dev, custom routes and an inherited
+`CLOUDFLARE_ENV`. The health check
 requires HTTPS on the stable staging workers.dev origin, HTTP 200, JSON content
 type and exactly `{"status":"ok"}` at `/relaiapp/api/v1/health`. It rejects redirects
 and retries up to six times with ten-second timeouts and five-second delays.
@@ -56,12 +58,22 @@ Check the current Cloudflare build history for live connection status.
 | Root directory | Repository root (`/`) |
 | Build command | `npm run build:staging:validated` |
 | Deploy command | `npm run deploy:staging:built` |
-| Build variable `CLOUDFLARE_ENV` | `staging` |
 | Build variable `STAGING_URL` | `https://relai-prototype-staging.lilaiireland.workers.dev` |
 | Build variable `NODE_VERSION` | `24` |
 
-4. Under **Build Variables and Secrets**, set the three plain build variables in
-   the table. Use Cloudflare's Builds API-token selection for deployment
+Do **not** set `CLOUDFLARE_ENV` in Cloudflare Builds variables or secrets. Remove
+any existing value before saving or retrying a build. `npm run build` invokes
+Vite in staging mode; `vite.config.ts` selects the named staging environment
+inside that build process and emits a flattened
+`dist/relai_prototype/wrangler.json` named `relai-prototype-staging`.
+`npm run deploy:staging:built` starts a separate Wrangler process against that
+generated config. If it inherits `CLOUDFLARE_ENV=staging`, Wrangler can target
+`relai-prototype-staging-staging`. The predeploy verifier fails before the dry run
+or deploy when the variable is present. Do not pass `--env staging` to a deploy
+of the flattened config.
+
+4. Under **Build Variables and Secrets**, set only the two plain build variables
+   in the table. Use Cloudflare's Builds API-token selection for deployment
    authentication. Keep credentials in Cloudflare; do not copy local OAuth tokens
    into source or GitHub. [Build settings](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
    [Node version selection](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/).
@@ -91,6 +103,7 @@ deployments. Manual recovery is an operator action, not a second automated owner
 ```sh
 # From a clean, current develop checkout, with a local Cloudflare login:
 npm ci
+unset CLOUDFLARE_ENV
 npm run build:staging:validated
 STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run deploy:staging:built
 ```
@@ -100,6 +113,16 @@ For read-only health verification in PowerShell:
 ```powershell
 $env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
 npm.cmd run verify:staging-health
+```
+
+For manual recovery in PowerShell, remove the inherited variable before running
+the build and deploy commands:
+
+```powershell
+Remove-Item Env:CLOUDFLARE_ENV -ErrorAction SilentlyContinue
+npm.cmd run build:staging:validated
+$env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
+npm.cmd run deploy:staging:built
 ```
 
 Environment selection happens at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).
