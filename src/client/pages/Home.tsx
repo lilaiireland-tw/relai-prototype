@@ -14,6 +14,7 @@ import BottomNav from "../components/BottomNav";
 import ProgressRing from "../components/ProgressRing";
 import { useDemoSession } from "../components/DemoSession";
 import { clientData } from "../services/data";
+import WorkerHealth from "../components/WorkerHealth";
 
 export default function HomePage() {
   const { profile } = useDemoSession();
@@ -42,7 +43,7 @@ export default function HomePage() {
         <header className="flex items-center justify-between px-5 pt-6">
           <div>
             <h1 className="text-xl font-bold text-text-primary">ReLai</h1>
-            <p className="text-sm text-text-secondary">示範模式 · 模擬資料</p>
+            <p data-source={clientData.source} className="text-sm text-text-secondary">示範模式 · 首頁、卡片、統計與設定：模擬資料</p>
           </div>
           <button
             type="button"
@@ -55,6 +56,7 @@ export default function HomePage() {
         </header>
 
         <main className="flex-1 overflow-y-auto px-5 pb-6">
+          <WorkerHealth />
           <div className="mt-5 rounded-2xl border border-gray-100 bg-card-gray p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-irish-green">

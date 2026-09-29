@@ -42,6 +42,7 @@ export default function FlashcardsPage() {
         </header>
 
         <div className="px-5 pt-4">
+          <p data-source={clientData.source} className="mb-2 text-xs text-text-secondary">單字卡 · 模擬資料</p>
           <p className="text-sm font-medium text-text-secondary">
             {totalCards === 0 ? 0 : index + 1} / {totalCards}
           </p>
