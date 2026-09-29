@@ -124,6 +124,12 @@ Cloudflare Workers 可以同時承接：
 
 ## 4. Closed Beta Auth
 
+Issue #41 implements the Worker login, me and logout endpoints under
+`/relaiapp/api/v1/auth`, with typed session middleware and the approved fixed
+seven-day HttpOnly cookie policy. See [auth/session API](docs/auth-session-api.md)
+for contracts, failure behavior and offline tests (`npm run test:auth-api`).
+Frontend DemoSession replacement remains a separate task.
+
 ### 產品規則
 
 Prototype 不提供註冊功能。
