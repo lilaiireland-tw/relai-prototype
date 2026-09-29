@@ -765,6 +765,28 @@ card flip/next, error log and registration absence. `npm run test:routing` verif
 built SPA deep links/assets and that the API namespace continues returning JSON
 independently of SPA fallback.
 
+### Browser API adapter (Issue #33)
+
+`src/client/lib/api.ts` centralizes typed browser transport. The only exposed
+request is `GET /relaiapp/api/v1/health`; URLs are root-relative and same-origin
+on every SPA route. Requests use `credentials: 'same-origin'` for future
+browser-managed HttpOnly cookies, without tokens or credential storage. The
+client validates the health JSON contract, rejects non-2xx/network/malformed
+responses with safe errors, and limits requests to 10 seconds.
+
+The Home connectivity panel consumes `services/runtime.ts` (`source: 'api'`)
+and shows loading, success, failure and retry states. Health proves runtime
+availability only, not authentication, database readiness or product persistence.
+Home/cards/stats/settings remain behind the existing `ClientDataService` in
+`services/data.ts` (`source: 'mock'`); stats and settings pages remain placeholders.
+The UI labels real connectivity separately from mock learning data. A failed
+health request never substitutes mock health or prevents mock product browsing.
+Components do not call `fetch` or import transport implementations.
+
+Tests cover URL/transport options, the existing Worker health contract, error
+and malformed responses, independent mock data, UI health states/retry, and
+centralized fetch calls. Existing SPA routing validation remains in place.
+
 Cloudflare's `single-page-application` asset handling serves `index.html` for
 direct navigation or refresh of client routes. Vite emits asset URLs under
 `/relaiapp/assets/`; `public/_redirects` rewrites those requests to the generated

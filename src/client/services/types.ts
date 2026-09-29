@@ -14,6 +14,7 @@ export interface HomeData {
  settings: { daily_goal: number; timezone: string }
 }
 export interface ClientDataService {
+ readonly source: 'mock' | 'api'
  getHome(): Promise<HomeData>
  listCards(type: Flashcard['card_type']): Promise<Flashcard[]>
 }
