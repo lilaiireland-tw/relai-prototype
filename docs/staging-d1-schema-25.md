@@ -1,4 +1,9 @@
-# Staging initial schema evidence — Issue #25
+# Historical staging D1 schema verification (Issue #25)
+
+This records the 2026-09-28 application and verification of migration `0001`.
+It is retained as operator evidence for that event. It does not establish the
+current remote migration or deployment state; check those separately before
+any new release. Migration `0002` is part of the committed schema history.
 
 Executed on 2026-09-28 from `feat/25-apply-staging-d1-schema`, based on latest
 `develop` commit `3bcc88233afab51392c484baa21cb1c25dd5db4c` (merged #24 / PR #28).

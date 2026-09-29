@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { verifyStagingBuild } from './verify-staging-build.mjs'
+import { URL } from 'node:url'
+import { verifyStagingBuild, verifyStagingDeployEnvironment } from './verify-staging-build.mjs'
 import { stagingUrls, verifyStagingHealth } from './verify-staging-health.mjs'
 
 const { Response } = globalThis
@@ -17,6 +19,7 @@ test('staging deployment guard rejects a production build, swapped DB, extra bin
   verifyStagingBuild(staging, staging)
   for (const patch of [
     { name: 'relai-prototype' },
+    { name: 'relai-prototype-staging-staging' },
     { workers_dev: false },
     { route: 'example.com/*' },
     { routes: ['example.com/*'] },
@@ -26,6 +29,21 @@ test('staging deployment guard rejects a production build, swapped DB, extra bin
     { d1_databases: [{ ...staging.d1_databases[0], database_id: 'production-id' }] },
     { d1_databases: [{ ...staging.d1_databases[0], binding: 'OTHER' }] },
   ]) assert.throws(() => verifyStagingBuild({ ...staging, ...patch }, staging))
+})
+
+test('staging deploy rejects an inherited Cloudflare environment before Wrangler runs', () => {
+  verifyStagingDeployEnvironment({})
+  for (const value of ['staging', 'production']) {
+    assert.throws(() => verifyStagingDeployEnvironment({ CLOUDFLARE_ENV: value }),
+      /Unset CLOUDFLARE_ENV.*second -staging suffix/)
+  }
+})
+
+test('staging deploy commands run the environment guard before Wrangler', () => {
+  const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  for (const name of ['deploy', 'deploy:staging:built']) {
+    assert.match(scripts[name], /npm run verify:staging-build && wrangler deploy/)
+  }
 })
 
 test('health URL guard accepts only the stable staging workers.dev origin', () => {

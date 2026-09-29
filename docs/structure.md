@@ -1,157 +1,32 @@
-# ReLai Project Structure
+# Repository structure
 
-## Summary
-
-ReLai is organized into separate frontend, backend, database, infrastructure, and documentation areas.
-
-- `frontend-web/`: Next.js frontend prototype and future product UI
-- `backend/`: FastAPI backend for business logic and API contracts
-- `database/`: database design notes, schema drafts, and seeds
-- `infra/supabase/`: Supabase migrations, policies, and deployment-facing SQL assets
-- `docs/`: architecture and product documentation
-
-PostgreSQL is the default database, with Supabase providing PostgreSQL, Auth, and Storage.
-
-## Folder Structure
+ReLai runs the browser app and Hono API from one Cloudflare Worker. The app and API share the `/relaiapp` origin; the Worker routes `/relaiapp/api/v1/*` before static SPA fallback.
 
 ```text
-relai-prototype/
-├─ docs/
-│  └─ structure.md
-├─ frontend-web/
-│  ├─ app/
-│  ├─ components/
-│  ├─ lib/
-│  ├─ public/
-│  ├─ .eslintrc.json
-│  ├─ next.config.mjs
-│  ├─ package.json
-│  ├─ package-lock.json
-│  ├─ postcss.config.js
-│  ├─ tailwind.config.ts
-│  ├─ tsconfig.json
-│  └─ README.md
-├─ backend/
-│  ├─ app/
-│  │  ├─ main.py
-│  │  ├─ core/
-│  │  │  ├─ config.py
-│  │  │  ├─ database.py
-│  │  │  └─ security.py
-│  │  ├─ api/
-│  │  │  ├─ deps.py
-│  │  │  └─ v1/
-│  │  ├─ models/
-│  │  ├─ schemas/
-│  │  ├─ repositories/
-│  │  ├─ services/
-│  │  │  ├─ ai/
-│  │  │  ├─ cards/
-│  │  │  ├─ stats/
-│  │  │  ├─ auth/
-│  │  │  └─ storage/
-│  │  └─ tests/
-│  ├─ alembic/
-│  ├─ pyproject.toml
-│  ├─ .env.example
-│  └─ README.md
-├─ database/
-│  ├─ schema/
-│  ├─ seeds/
-│  └─ README.md
-├─ infra/
-│  └─ supabase/
-│     ├─ migrations/
-│     ├─ policies/
-│     ├─ seeds/
-│     └─ README.md
-├─ assets/
-├─ ReLai_PRD_v3.1.md
-└─ README.md
+src/
+  client/
+    components/      Auth session, navigation and UI components
+    lib/             Same-origin API client
+    pages/           Splash, login, password change and mock product pages
+    services/        Client data boundary, mock fixtures and runtime health
+    styles/          Global styles
+    App.tsx          React Router routes
+    main.tsx         Browser entry
+  worker/
+    auth/            Credential and session-token crypto
+    middleware/      Session and password-change guards
+    persistence/     D1 users and sessions repositories
+    routes/          Health and auth endpoints
+    services/        Auth service
+    index.ts         Hono Worker entry
+migrations/          D1 schema history (0001 and 0002)
+scripts/             Account management, deployment/schema checks and tests
+docs/                Operator and developer runbooks
+public/              Static asset redirect rules
 ```
 
-## System Relationship
+Root `package.json`, `vite.config.ts`, `wrangler.jsonc`, and `index.html` define the active build and runtime. `ReLai_PRD_v3.1.md` describes product requirements, including later phases.
 
-```text
-[User]
-   |
-   v
-[frontend-web / Next.js]
-   | \
-   |  \-- session / auth state --> [Supabase Auth + Storage]
-   |
-   \---- REST / JSON ----> [backend / FastAPI]
-                               |
-                               |-- AI extraction / OCR integration
-                               |
-                               \-- data persistence --> [Supabase PostgreSQL]
-```
+The Worker currently implements health, login, logout, session lookup and password change. D1 repositories currently cover users and sessions. Client card and error-log screens use mock data; stats and settings product screens are placeholders, though Settings links to the working password-change flow. No product data API or Gemini ingestion exists yet.
 
-## Responsibility Split
-
-### Frontend
-
-`frontend-web/` is responsible for:
-
-- routing and UI rendering
-- user interaction flows
-- authentication session handling
-- uploading text or images to backend APIs
-- rendering cards, reviews, stats, and onboarding
-
-It should avoid owning core extraction logic or direct database writes for application data.
-
-### Backend
-
-`backend/` is responsible for:
-
-- API contracts
-- auth verification
-- ingestion and extraction orchestration
-- business rules for flashcards, error logs, reviews, stats, and settings
-- database access
-
-### Database and Supabase
-
-`database/` and `infra/supabase/` are responsible for:
-
-- schema planning
-- migrations
-- row-level security policies
-- seed data
-- storage-related SQL assets
-
-## Suggested API Areas
-
-```text
-/api/v1/auth
-/api/v1/ingestion
-/api/v1/flashcards
-/api/v1/error-logs
-/api/v1/reviews
-/api/v1/stats
-/api/v1/settings
-```
-
-## Suggested Data Domains
-
-```text
-auth.users
-profiles
-source_items
-flashcards
-error_logs
-review_events
-user_stats
-user_settings
-achievements
-user_achievements
-```
-
-## Defaults and Assumptions
-
-- Frontend lives in `frontend-web/`
-- Backend lives in `backend/`
-- Database defaults to PostgreSQL
-- Supabase is the managed platform for PostgreSQL, Auth, and Storage
-- This structure is for v1 development and can expand later into shared packages if needed
+See the [README](../README.md) for commands and environment names, [auth/session API](auth-session-api.md) for current routes, and [D1 migrations](d1-migrations.md) for schema operations.

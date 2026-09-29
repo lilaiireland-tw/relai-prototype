@@ -34,8 +34,8 @@ password_digest = "v1:" || lowercase_hex(mac)
 
 The prefix is three bytes, including one NUL byte. Fixed prefix and salt lengths
 make the byte boundaries unambiguous, even when a password contains NULs.
-Passwords and pepper are not trimmed or Unicode-normalized. Password policy
-and high-entropy password issuance belong to later account-management work.
+Passwords and pepper are not trimmed or Unicode-normalized. The current
+account-management CLI and password-change API enforce their respective policies.
 The stored digest is exactly 67 characters, with no whitespace, extra fields,
 uppercase hex or unsupported version. Salt must be canonical base64url with
 exactly 16 decoded bytes; padding and nonzero unused encoding bits are rejected.
@@ -45,8 +45,8 @@ Invalid salt passed to derivation throws a fixed format error; a missing pepper
 when importing a key throws a fixed configuration error. Crypto runtime failures
 propagate to the server-side caller. These internal errors must not be serialized
 as public auth responses. No function receives a username or queries accounts;
-generic login errors and account-existence timing policy belong to the later
-login service. Format validation itself is not claimed to take constant time.
+generic login errors and account-existence timing policy belong to the auth
+service. Format validation itself is not claimed to take constant time.
 
 Synthetic interoperability vector (not an account or a production secret):
 
@@ -58,8 +58,9 @@ AUTH_PEPPER:     "test-only-pepper"
 password_digest: v1:4c0e8ae7c9489938b1148df12255433d4f5522a53acec7d596bec831a0999caa
 ```
 
-This is the approved small closed-beta scheme for system-issued high-entropy
-passwords, not a new consumer-password architecture. Any future scheme needs
+This is the approved small closed-beta credential scheme. Interactive account
+creation also permits an operator-chosen temporary password of at least eight
+characters, followed by a required first-login change. Any future scheme needs
 a new version and explicit product/architecture approval.
 
 ## Opaque sessions
@@ -96,7 +97,7 @@ inputs, verification, malformed storage/transport, separate raw/digest types,
 digest-only repository calls and absence of secret logging.
 
 This module is server-side only. Do not import it into `src/client` or put
-`AUTH_PEPPER` in `VITE_*`, public responses or D1. It adds no routes, cookies,
-account-management script, frontend auth changes or schema changes.
+`AUTH_PEPPER` in `VITE_*`, public responses or D1. The crypto module itself
+does not decide routes, cookies, account workflows or schema.
 
 Runtime reference: [Cloudflare Workers Web Crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/).

@@ -30,13 +30,13 @@ results rather than returning an empty success.
   Never log credentials/digests or expose raw database errors or `UserRow` to clients.
 - Use narrowly named operations rather than arbitrary field patches. Users support
   provisioning, login timestamp recording, credential replacement and activation.
-  Disabling an account does not itself revoke sessions: the later admin/auth
-  service must orchestrate both operations as required by the PRD.
+  Disabling an account does not itself revoke sessions: the admin CLI orchestrates
+  both operations as required by the PRD.
 - `tokenDigest` validates an already computed lowercase SHA-256 hex digest and
   gives it a branded type. Session create/lookup/revoke also validate at runtime.
   No persistence API takes a raw token or computes a digest. The upstream auth
   layer must derive the digest; format validation cannot prove its provenance.
-  Issue #37 now supplies that upstream derivation in `src/worker/auth/crypto.ts`:
+  The auth layer supplies that upstream derivation in `src/worker/auth/crypto.ts`:
   `digestSessionToken` hashes raw transport text and returns this existing
   `TokenDigest` type. See [auth crypto contracts](auth-crypto.md). Raw tokens
   remain outside repository inputs; credentials contain only salt/digest fields.
@@ -47,7 +47,7 @@ results rather than returning an empty success.
   account operation, not authorization based on a client-supplied user ID.
 - Future user-owned table repositories must include authenticated `user_id` in
   their query predicates. Client-supplied IDs never establish authorization.
-  Add only repositories assigned by a later issue.
+  Add product repositories only under an assigned issue.
 
 ## Offline tests
 

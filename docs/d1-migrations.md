@@ -2,9 +2,9 @@
 
 Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
-use `migrations_dir: "migrations"`. Issue #22 established the workflow; Issue #24
-adds `0001_initial_core_schema.sql` for the seven PRD-defined core tables.
-Legacy Supabase/Alembic migrations remain historical references and untouched.
+use `migrations_dir: "migrations"`. The committed history contains
+`0001_initial_core_schema.sql` and `0002_add_users_must_change_password.sql`.
+Check remote migration history before code that depends on either migration is deployed.
 
 Run all commands from the repository root with the installed Wrangler. Each
 command selects the database name, source config and environment explicitly.
@@ -41,8 +41,7 @@ with `npm run dev`, and never accesses a remote database. Stop the dev server
 before applying; smoke-test the assigned change locally and commit its SQL before
 remote apply. Repeated apply should report no remaining migrations.
 
-With no SQL files, list/apply reports no migrations; this is expected for #22.
-Do not create a dummy migration or the application schema to silence it.
+Do not create a dummy migration to silence a list/apply result.
 
 ## Explicit staging operation
 
@@ -76,7 +75,7 @@ for environment safety.
 
 ## Production: explicit manual release only
 
-These commands are a future release runbook, **not executed for #22**. There is
+These commands are a manual release runbook. There is
 no production migration package script or CI/CD hook. Deployment alone never
 applies migrations.
 
@@ -123,8 +122,8 @@ npm run db:migrations:apply:local
 
 The config check resolves every binding offline and checks the root migration
 directory and distinct database IDs. CLI help checks command support; local
-list/apply checks directory discovery without remote writes. No remote apply is
-needed for #22. Actual SQL replay and schema smoke tests belong to future tasks.
+list/apply checks directory discovery without remote writes. Remote apply is not
+part of ordinary validation. Use `npm run test:d1-schema` for local SQL replay.
 
 On Windows use `npm.cmd` / `npx.cmd` if PowerShell blocks `.ps1` launchers.
 Keep logs in a writable temporary path with
@@ -140,7 +139,7 @@ and [Wrangler D1 commands](https://developers.cloudflare.com/workers/wrangler/co
 section twelve exactly. It preserves PRD nullability, primary keys and defaults:
 `role = 'user'`, `is_active = 1`, `is_favorite = 0`, the four stats counters at
 `0`, and `daily_goal = 10`. No SQL timezone default is defined in the PRD.
-IDs/timestamps remain supplied by future application code.
+IDs/timestamps are supplied by application code, not SQL defaults.
 
 SQLite's unique indexes for `username`, `token_digest` and `client_event_id`
 satisfy their required lookup indexes. Seven explicit indexes cover the other
@@ -166,8 +165,8 @@ Temporary state/logs are retained in the OS temp directory for inspection.
 
 This test is an explicit operator command, outside `npm test`, GitHub Actions,
 Cloudflare staging CD and deployment scripts. Neither remote database is accessed.
-No remote migration was applied for Issue #24; normal migration safety rules still
-apply to any future separately authorized release.
+The local schema test does not apply remote migrations. Follow the operator
+workflow above for a separately authorized release.
 
 ## Initial staging application (Issue #25)
 

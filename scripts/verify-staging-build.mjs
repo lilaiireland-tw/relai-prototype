@@ -19,7 +19,13 @@ export function verifyStagingBuild(config, staging) {
   assert.notEqual(db.remote, true)
 }
 
+export function verifyStagingDeployEnvironment(env) {
+  assert.ok(!env.CLOUDFLARE_ENV,
+    'Unset CLOUDFLARE_ENV before deploying the flattened staging build; Wrangler can append a second -staging suffix')
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  verifyStagingDeployEnvironment(process.env)
   const staging = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
   const built = JSON.parse(await readFile('dist/relai_prototype/wrangler.json', 'utf8'))
   verifyStagingBuild(built, staging)
