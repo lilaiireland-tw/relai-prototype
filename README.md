@@ -718,6 +718,14 @@ secret values or DB configuration in client code or `VITE_*` variables.
 
 ## 13. Local development
 
+### Worker persistence foundation (Issue #30)
+
+`src/worker/persistence` provides typed D1 prepared-statement repositories for
+users and sessions. See [repository conventions](docs/d1-persistence.md) for
+inputs, result behavior, digest-only session access and ownership boundaries.
+Run `npm run test:persistence` for deterministic in-memory SQLite tests using
+the approved migration; these tests also run in `npm test` without remote D1 access.
+
 ### Current Worker API skeleton (Issue #11)
 
 The root Vite app and Hono API share one Cloudflare Worker. Run `npm run dev`
