@@ -1,7 +1,7 @@
 import { mutate, type PersistenceDatabase } from './d1'
 import type { UserSettingsRow } from './types'
 
-const columns = 'user_id, daily_goal, timezone, created_at, updated_at'
+const columns = 'user_id, daily_goal, timezone, english_level, created_at, updated_at'
 type SettingsPatch = Partial<Pick<UserSettingsRow, 'daily_goal' | 'timezone'>>
 
 export function createUserSettingsRepository(db: PersistenceDatabase) {

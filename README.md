@@ -6,8 +6,8 @@ ReLai 是「哩來愛爾蘭」面向在愛爾蘭學英文的臺灣學習者所�
 
 - 前端使用 React、TypeScript、Vite、React Router 與 Tailwind CSS，入口位於 `/relaiapp/`。
 - 單一 Cloudflare Worker 在相同來源提供靜態前端及 Hono API；API 路徑以 `/relaiapp/api/v1/*` 開頭。
-- 目前的 API 提供健康檢查與身分驗證。健康檢查只代表 Worker 可回應，不代表 D1 或產品功能已就緒。
-- Cloudflare D1 保存現有資料表結構與驗證資料。已實作使用者、工作階段、卡片、複習、統計與設定的 D1 repository；產品 API 與畫面尚未接入這些 repository，學習畫面仍使用模擬資料或預留畫面。CEFR-J A1–B2 共用目錄 schema 已建立，但尚未匯入資料。
+- 目前的 API 提供健康檢查、身分驗證與初始 CEFR-J 級別選擇／starter bootstrap。健康檢查只代表 Worker 可回應，不代表 D1 或產品功能已就緒。
+- Cloudflare D1 保存現有資料表結構與驗證資料。已實作使用者、工作階段、卡片、複習、統計與設定的 D1 repository，並有初始 starter bootstrap API；一般產品 API 與畫面尚未接入這些 repository，學習畫面仍使用模擬資料或預留畫面。CEFR-J A1–B2 共用目錄 schema 已建立；正式環境尚未匯入目錄資料。
 - Gemini 是後續 AI 擷取功能預定使用的供應商；AI 擷取及 PWA／離線功能尚未實作。
 
 ## 封閉測試帳號與登入
@@ -75,8 +75,9 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - D1 基礎與封閉測試身分驗證：已完成。
 - 暫時密碼與首次登入變更密碼流程：已完成。
 - 卡片、複習、統計與設定的 D1 repository：已完成；產品 API 與畫面整合尚未開始。
-- CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入與 starter bootstrap 尚未開始。
-- CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入，使用者 starter bootstrap 尚未實作。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
+- CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入尚未執行。
+- CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
+- 初始級別選擇與 starter cards：已提供 authenticated API，從共用目錄複製最多 100 張至使用者卡片，並保護重試與重複字詞；尚未建立前端 onboarding。行為見 [starter API](docs/onboarding-starter-api.md)。
 - 後續階段：Gemini 擷取及 PWA／離線支援。
 
 產品行為以 [PRD](ReLai_PRD_v3.4.md) 為準；實作與部署以本 README 及相關操作手冊為準。個別任務範圍以指定的 GitHub Issue 或產品負責人指示為準。
