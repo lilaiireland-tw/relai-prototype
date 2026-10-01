@@ -1,0 +1,15 @@
+{
+  "dataset": "CEFR-J Vocabulary Profile",
+  "version": "1.6",
+  "provenance": "The CEFR-J Wordlist Version 1.6. Compiled by Yukio Tono, Tokyo University of Foreign Studies. Retrieved from https://www.cefr-j.org/download.html on 2026-10-01.",
+  "rows": [
+    { "headword": "a", "pos": "determiner", "CEFR": "A1" },
+    { "headword": "about", "pos": "adverb", "CEFR": "A1" },
+    { "headword": "about", "pos": "preposition", "CEFR": "A1" },
+    { "headword": "ability", "pos": "noun", "CEFR": "A2" },
+    { "headword": "abandon", "pos": "verb", "CEFR": "B1" },
+    { "headword": "above", "pos": "adjective", "CEFR": "B1" },
+    { "headword": "abandoned", "pos": "adjective", "CEFR": "B2" },
+    { "headword": "abnormal", "pos": "adjective", "CEFR": "B1" }
+  ]
+}
