@@ -57,6 +57,7 @@ describe('users and sessions persistence', () => {
       'ac5b16e3b0d8c264a271d6dd7fef4df55ecd5428654097dd42d6ff0c75a14337')
     expect(readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()).toEqual([
       '0001_initial_core_schema.sql', '0002_add_users_must_change_password.sql',
+      '0003_add_cefr_j_vocabulary_foundation.sql',
     ])
     const legacy = new DatabaseSync(':memory:')
     try {
