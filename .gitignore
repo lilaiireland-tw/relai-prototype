@@ -26,6 +26,7 @@
 /build
 /dist
 /.wrangler/
+/data/cefr-j-local/
 .dev.vars*
 
 # misc

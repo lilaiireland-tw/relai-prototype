@@ -30,6 +30,7 @@
     "deploy:staging:built": "npm run verify:staging-build && wrangler deploy --config dist/relai_prototype/wrangler.json --dry-run && wrangler deploy --config dist/relai_prototype/wrangler.json && npm run verify:staging-health",
     "deploy:production": "npm run build:production && wrangler deploy",
     "user:manage": "tsx scripts/manage-user.ts",
+    "catalog:import": "tsx scripts/import-cefr-j.ts",
     "test:admin": "vitest run scripts/manage-user.test.ts scripts/manage-user-platform.test.ts"
   },
   "dependencies": {

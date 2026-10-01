@@ -75,7 +75,8 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - D1 基礎與封閉測試身分驗證：已完成。
 - 暫時密碼與首次登入變更密碼流程：已完成。
 - 卡片、複習、統計與設定的 D1 repository：已完成；產品 API 與畫面整合尚未開始。
-- CEFR-J A1–B2 schema：已加入儲存庫 migration；目錄匯入與 starter bootstrap 尚未開始。
+- CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入與 starter bootstrap 尚未開始。
+- CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入，使用者 starter bootstrap 尚未實作。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
 - 後續階段：Gemini 擷取及 PWA／離線支援。
 
 產品行為以 [PRD](ReLai_PRD_v3.4.md) 為準；實作與部署以本 README 及相關操作手冊為準。個別任務範圍以指定的 GitHub Issue 或產品負責人指示為準。
