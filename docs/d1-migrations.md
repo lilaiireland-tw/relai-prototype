@@ -136,8 +136,9 @@ and [Wrangler D1 commands](https://developers.cloudflare.com/workers/wrangler/co
 ## Initial core schema validation (Issue #24)
 
 `0001_initial_core_schema.sql` creates only `users`, `sessions`, `source_items`,
-`flashcards`, `review_events`, `user_stats`, and `user_settings`, matching PRD
-section twelve exactly. It preserves PRD nullability, primary keys and defaults:
+`flashcards`, `review_events`, `user_stats`, and `user_settings`. Later migrations
+add the PRD password-change state and CEFR-J catalog, level and linkage columns.
+The initial migration preserves its original nullability, primary keys and defaults:
 `role = 'user'`, `is_active = 1`, `is_favorite = 0`, the four stats counters at
 `0`, and `daily_goal = 10`. No SQL timezone default is defined in the PRD.
 IDs/timestamps are supplied by application code, not SQL defaults.
