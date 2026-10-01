@@ -7,12 +7,12 @@ export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WH
 export function verifyCoreSchema(execute) {
   const query = (sql) => execute(sql).flatMap((response) => response.results)
   const schema = () => query(schemaSql)
-  const prd = readFileSync('ReLai_PRD_v3.3.md', 'utf8')
+  const prd = readFileSync('ReLai_PRD_v3.4.md', 'utf8')
   const section = prd.split('# 十二、Database Schema')[1].split('# 十三、Database')[0]
   const definitions = [...section.matchAll(/## `([^`]+)`\s+```text\s+([^`]+)```/g)]
-  const coreTables = ['users', 'sessions', 'source_items', 'flashcards', 'review_events', 'user_stats', 'user_settings']
-  assert.deepEqual(definitions.map((match) => match[1]), coreTables)
-  const tables = [...coreTables, 'vocabulary_catalog']
+  const tables = definitions.map((match) => match[1])
+  assert.equal(new Set(tables).size, tables.length, 'PRD table definitions must be unique')
+  assert.ok(tables.length > 0, 'PRD must define application tables')
   const initialSchema = schema()
   assert.deepEqual(initialSchema.filter((row) => row.type === 'table').map((row) => row.name).sort(), [...tables].sort())
   assert.ok(initialSchema.every((row) => ['table', 'index'].includes(row.type)), 'No triggers or views')
@@ -29,26 +29,8 @@ export function verifyCoreSchema(execute) {
     index.table_name === table && (!unique || index.is_unique === 1) &&
     JSON.stringify(indexes.filter((row) => row.index_name === index.index_name).map((row) => row.column_name)) === JSON.stringify(columns))
 
-  const extensions = {
-    user_settings: ['english_level TEXT'],
-    flashcards: ['vocabulary_catalog_id TEXT', 'vocabulary_key TEXT'],
-  }
-  const catalogDefinition = `id TEXT PK
-headword TEXT NOT NULL
-normalized_key TEXT NOT NULL
-part_of_speech TEXT
-cefr_level TEXT NOT NULL
-source_dataset TEXT NOT NULL
-source_version TEXT NOT NULL
-provenance TEXT NOT NULL
-zh_tw_definition TEXT
-english_example TEXT
-zh_tw_example_translation TEXT
-irish_usage TEXT
-created_at TEXT NOT NULL
-updated_at TEXT NOT NULL`
-  for (const [, table, definition] of [...definitions, [null, 'vocabulary_catalog', catalogDefinition]]) {
-    const expected = [...definition.trim().split(/\r?\n/), ...(extensions[table] ?? [])].map((line) => {
+  for (const [, table, definition] of definitions) {
+    const expected = definition.trim().split(/\r?\n/).map((line) => {
       const [name, type] = line.split(' ')
       if (line.includes('UNIQUE')) assert.ok(hasIndex(table, [name], true), `${table}.${name} must be unique`)
       return { name, type, notnull: Number(line.includes('NOT NULL')),

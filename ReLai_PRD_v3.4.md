@@ -1,10 +1,10 @@
-# ReLai（哩來語感特訓）— 產品需求與架構綱要 PRD v3.3
+# ReLai（哩來語感特訓）— 產品需求與架構綱要 PRD v3.4
 
-**文件版本**：v3.3（Cloudflare Prototype 架構與現況同步版）
+**文件版本**：v3.4（CEFR-J A1–B2 schema 同步版）
 
 **品牌歸屬**：哩來愛爾蘭（@lilaiireland）  
 **開發策略**：Vibe Coding / Codex Agent 輔助全端開發 / 敏捷開發  
-**最後更新**：2026-09-29
+**最後更新**：2026-10-01
 
 **文件角色**：產品需求、功能優先級與驗收條件的最高指導文件。工程實作與部署現況同時遵循根目錄的 `README.md`。
 
@@ -20,7 +20,7 @@
 
 ## 本文件與目前實作的邊界
 
-本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema 與使用者／工作階段資料存取、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。現有 Worker API 僅提供健康檢查與驗證；學習畫面仍使用模擬資料或預留畫面。卡片／複習／統計／設定的真實資料持久化、Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署與 migration 狀態須由操作人員查核，不由本文件推定。
+本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema、使用者／工作階段及卡片／複習／統計／設定的 D1 repository、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。現有 Worker API 僅提供健康檢查與驗證；學習畫面仍使用模擬資料或預留畫面。CEFR-J 目錄匯入、產品 API／畫面整合、Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署與 migration 狀態須由操作人員查核，不由本文件推定。
 
 目前的入口為 `/relaiapp/`，API 命名空間為 `/relaiapp/api/v1/*`。已實作的路由、指令、環境綁定與部署安全規則以根目錄 [README](README.md) 及其操作手冊為準。
 
@@ -525,6 +525,8 @@ last_reviewed_at TEXT
 next_review_at TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
+vocabulary_catalog_id TEXT
+vocabulary_key TEXT
 ```
 
 `card_type`：
@@ -533,6 +535,8 @@ updated_at TEXT NOT NULL
 vocabulary
 error_log
 ```
+
+`vocabulary_catalog_id` 可追溯至共用目錄的 `id`；同一使用者與目錄條目只能連結一張卡。`vocabulary_key` 是個人 vocabulary 卡的非空、trim 後小寫標準化 identity，同一使用者不可重複。兩欄可為 null，以保留現有卡片；非 null 時只可用於 vocabulary 卡。Bootstrap 和後續 AI 匯入須提供相同的標準化 key，避免為同一使用者重複建立單字卡。
 
 ## `review_events`
 
@@ -558,6 +562,27 @@ last_active_date TEXT
 updated_at TEXT NOT NULL
 ```
 
+## `vocabulary_catalog`
+
+```text
+id TEXT PK
+headword TEXT NOT NULL
+normalized_key TEXT NOT NULL
+part_of_speech TEXT
+cefr_level TEXT NOT NULL
+source_dataset TEXT NOT NULL
+source_version TEXT NOT NULL
+provenance TEXT NOT NULL
+zh_tw_definition TEXT
+english_example TEXT
+zh_tw_example_translation TEXT
+irish_usage TEXT
+created_at TEXT NOT NULL
+updated_at TEXT NOT NULL
+```
+
+共用目錄僅供 CEFR-J Vocabulary Profile A1–B2；`cefr_level` 只接受 A1、A2、B1、B2，不加入 C1/C2。`normalized_key` 是非空、trim 後小寫的穩定字詞 identity。相同 `source_dataset`、`source_version`、`cefr_level`、`normalized_key` 與 `part_of_speech`（含缺值）不得重複。來源、版本與 `provenance` 保留可追溯性；ReLai 自有的中文釋義、英語例句、繁中例句翻譯及愛爾蘭用法可以為 null。此 schema 不匯入目錄資料，也不建立 starter cards。
+
 ## `user_settings`
 
 ```text
@@ -566,7 +591,10 @@ daily_goal INTEGER NOT NULL DEFAULT 10
 timezone TEXT NOT NULL
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
+english_level TEXT
 ```
+
+`english_level` 初始可為 null；選擇後僅接受 A1、A2、B1、B2。選擇 A2 時只取 A2 starter batch，不自動複製較低級別；日後改級別不刪除既有卡片。
 
 ---
 
@@ -1309,7 +1337,7 @@ public/
 docs/
 
 README.md
-ReLai_PRD_v3.3.md
+ReLai_PRD_v3.4.md
 package.json
 vite.config.ts
 wrangler.jsonc
@@ -1326,7 +1354,7 @@ wrangler.jsonc
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql` 與 `0002_add_users_must_change_password.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
+兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` 與 `0003_add_cefr_j_vocabulary_foundation.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
 
 `npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging。Production 從 `main` 走受保護的手動發布流程；目前不可將 `npm run deploy:production` 視為已驗證的 production 部署指令，因為它在 production 建置後執行未指定設定檔的 `wrangler deploy`，而根目錄設定預設指向 staging。首次 production 發布前，須另行驗證產生的設定檔、Worker／D1 綁定與確切部署指令，並取得發布授權。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
 
@@ -1408,8 +1436,10 @@ Cloudflare URL 可正常載入
 - `must_change_password` 及首次登入強制變更
 - 已登入使用者自行變更密碼
 
-## Phase 4 — Real Data（下一階段，尚未開始）
+## Phase 4 — Real Data（進行中）
 
+- 卡片／複習／統計／設定 D1 repository 已完成
+- CEFR-J A1–B2 catalog、使用者級別與去重連結 schema 已加入 migration；資料匯入與 starter bootstrap 尚未開始
 - cards API
 - settings
 - review
@@ -1506,7 +1536,7 @@ Closed Beta 優先看：
 以：
 
 ```text
-ReLai_PRD_v3.3.md
+ReLai_PRD_v3.4.md
 ```
 
 為準。
@@ -1558,6 +1588,6 @@ ReLai v1 的工程方向可以濃縮成：
 
 ---
 
-**文件版本：PRD v3.3 — Cloudflare Prototype 架構與現況同步版**
+**文件版本：PRD v3.4 — CEFR-J A1–B2 schema 同步版**
 
-**最後更新：2026-09-29**
+**最後更新：2026-10-01**

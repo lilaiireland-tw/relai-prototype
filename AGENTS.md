@@ -5,7 +5,7 @@ Before implementation, read:
 1. AGENTS.md
 2. assigned GitHub Issue
 3. README.md
-4. ReLai_PRD_v3.3.md
+4. ReLai_PRD_v3.4.md
 
 If documents conflict:
 - Product requirements: PRD

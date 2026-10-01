@@ -79,8 +79,8 @@ in `dist/client`. Dry runs show the selected D1 resource without deploying it.
 ## Migration source of truth (Issue #22)
 
 All D1 bindings explicitly point to repository-root `migrations/`. This directory
-is the v1 schema source of truth. Its committed history includes `0001` and
-`0002`; check remote history separately before a deployment that depends on them.
+is the v1 schema source of truth. Its committed history includes `0001`, `0002`
+and `0003`; check remote history separately before a deployment that depends on them.
 See [D1 migration workflow](d1-migrations.md) for exact create/list/apply commands,
 append-only rules, local persistence, and the explicit manual production runbook.
 Local operations use simulated D1; staging operations explicitly name
