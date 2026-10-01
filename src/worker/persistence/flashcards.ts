@@ -13,7 +13,7 @@ export interface CardCursor { created_at: string; id: string }
 export interface CardListQuery {
   cardType?: CardType
   favorite?: boolean
-  /** PRD v3.3: never reviewed or reviewed before this server-computed seven-day cutoff. */
+  /** PRD v3.4: never reviewed or reviewed before this server-computed seven-day cutoff. */
   needsReviewBefore?: string
   limit?: number
   cursor?: CardCursor

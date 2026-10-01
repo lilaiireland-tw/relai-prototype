@@ -4,7 +4,9 @@
 `createRepositories(env.DB)` per request/service invocation. It accepts the
 structural subset of the Cloudflare D1 binding needed here (`prepare`, `bind`,
 `first`, `run`, `all`); no adapter, ORM, global binding or route SQL is required.
-Only users and sessions repositories are implemented. Issue #39 adds
+Users, sessions, flashcards, review events, user stats and user settings
+repositories are implemented. The product API and screens do not yet use the
+product repositories. Issue #39 adds
 `users.listAccounts()`, a fixed safe-field projection for internal account
 management; it never selects credential salts or digests and rejects failed D1
 results rather than returning an empty success.
@@ -45,9 +47,8 @@ results rather than returning an empty success.
   updates require both session ID and authenticated user ID. Digest lookup/revoke
   are the session-auth bootstrap operations. User-wide revocation is an internal
   account operation, not authorization based on a client-supplied user ID.
-- Future user-owned table repositories must include authenticated `user_id` in
-  their query predicates. Client-supplied IDs never establish authorization.
-  Add product repositories only under an assigned issue.
+- User-owned table repositories include authenticated `user_id` in their query
+  predicates. Client-supplied IDs never establish authorization.
 
 ## Offline tests
 

@@ -3,8 +3,9 @@
 Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
 use `migrations_dir: "migrations"`. The committed history contains
-`0001_initial_core_schema.sql` and `0002_add_users_must_change_password.sql`.
-Check remote migration history before code that depends on either migration is deployed.
+`0001_initial_core_schema.sql`, `0002_add_users_must_change_password.sql`,
+and `0003_add_cefr_j_vocabulary_foundation.sql`.
+Check remote migration history before code that depends on a migration is deployed.
 
 Run all commands from the repository root with the installed Wrangler. Each
 command selects the database name, source config and environment explicitly.
@@ -135,8 +136,9 @@ and [Wrangler D1 commands](https://developers.cloudflare.com/workers/wrangler/co
 ## Initial core schema validation (Issue #24)
 
 `0001_initial_core_schema.sql` creates only `users`, `sessions`, `source_items`,
-`flashcards`, `review_events`, `user_stats`, and `user_settings`, matching PRD
-section twelve exactly. It preserves PRD nullability, primary keys and defaults:
+`flashcards`, `review_events`, `user_stats`, and `user_settings`. Later migrations
+add the PRD password-change state and CEFR-J catalog, level and linkage columns.
+The initial migration preserves its original nullability, primary keys and defaults:
 `role = 'user'`, `is_active = 1`, `is_favorite = 0`, the four stats counters at
 `0`, and `daily_goal = 10`. No SQL timezone default is defined in the PRD.
 IDs/timestamps are supplied by application code, not SQL defaults.
@@ -159,9 +161,14 @@ It reads current PRD table definitions, including the Issue #47 approved
 `users.must_change_password INTEGER NOT NULL DEFAULT 0` column, and compares all columns, types,
 nullability, primary keys and defaults with `PRAGMA table_info`. Index metadata
 checks every required index and all three unique constraints. It verifies all
-seven tables are empty, migration history records each committed migration once, and a second
+application tables are empty, migration history records each committed migration once, and a second
 apply/list reports no pending migrations with schema and history unchanged.
 Temporary state/logs are retained in the OS temp directory for inspection.
+
+Issue #63 extends this local test with the empty CEFR-J A1–B2 catalog, nullable
+`user_settings.english_level`, and flashcard catalog/normalized-key linkage.
+It checks allowed levels, uniqueness, nullable enrichment and per-user dedupe.
+The new migration does not import vocabulary or apply to remote D1.
 
 This test is an explicit operator command, outside `npm test`, GitHub Actions,
 Cloudflare staging CD and deployment scripts. Neither remote database is accessed.

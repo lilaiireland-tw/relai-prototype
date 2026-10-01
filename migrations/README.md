@@ -7,6 +7,12 @@ NOT NULL flag with DEFAULT 0; existing users remain normal accounts. Do not add
 placeholder/no-op migrations. Check remote migration history before deployment;
 the committed files alone do not prove remote application status.
 
+`0003_add_cefr_j_vocabulary_foundation.sql` adds the empty CEFR-J A1–B2 catalog,
+nullable user level, and catalog/per-user vocabulary identities on flashcards.
+Catalog provenance stays separate from nullable ReLai enrichment. Future import
+and bootstrap tasks must supply catalog rows and normalized vocabulary keys;
+this migration does not seed data or create cards.
+
 Future schema tasks create sequential, descriptive SQL files with
 `npm run db:migrations:create -- describe_change` from the repository root.
 Review the generated filename and SQL, apply locally, smoke-test, and commit
