@@ -126,17 +126,42 @@ describe('authenticated product APIs', () => {
     }
   })
 
+  it('accepts only true for needs_review and omits the filter when absent', async () => {
+    for (const value of ['false', '0', '1', 'TRUE', '']) {
+      const response = await request(`/cards?needs_review=${value}`)
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ error: { code: 'INVALID_INPUT' } })
+    }
+    const response = await request('/cards')
+    expect(response.status).toBe(200)
+    expect((await response.json() as { cards: { id: string }[] }).cards.map(card => card.id))
+      .toEqual(['recent', 'boundary', 'b', 'a'])
+  })
+
   it('strictly whitelists card fields and keeps card type and catalog identity immutable', async () => {
     for (const key of ['id', 'user_id', 'card_type', 'vocabulary_catalog_id', 'vocabulary_key',
-      'source_item_id', 'source', 'created_at', 'last_reviewed_at', 'next_review_at']) {
-      expect((await request('/cards/a', owner, 'PATCH', { [key]: 'changed' })).status).toBe(400)
+      'source_item_id', 'source', 'created_at', 'updated_at', 'last_reviewed_at', 'next_review_at', 'is_favorite']) {
+      for (const cardId of ['a', 'b']) {
+        expect((await request(`/cards/${cardId}`, owner, 'PATCH',
+          { part_of_speech: 'edited', [key]: 'changed' })).status).toBe(400)
+      }
     }
     expect((await request('/cards/a', owner, 'PATCH', { explanation: 'wrong type' })).status).toBe(400)
-    expect((await request('/cards/b', owner, 'PATCH', { part_of_speech: 'noun' })).status).toBe(400)
+    expect((await request('/cards/b', owner, 'PATCH', { zh_tw_definition: 'wrong type' })).status).toBe(400)
     expect((await request('/cards/a', owner, 'PATCH', { back_content: 'edited', zh_tw_definition: 'meaning' })).status).toBe(200)
     expect((await request('/cards/b', owner, 'PATCH', { explanation: 'fixed' })).status).toBe(200)
     expect(sqlite.prepare("SELECT card_type, back_content FROM flashcards WHERE id = 'a'").get())
       .toEqual({ card_type: 'vocabulary', back_content: 'edited' })
+  })
+
+  it('persists Error Log error-type edits through part_of_speech for the owner only', async () => {
+    expect((await request('/cards/b', other, 'PATCH', { part_of_speech: 'Grammar' })).status).toBe(404)
+    const response = await request('/cards/b', owner, 'PATCH', { part_of_speech: 'Grammar' })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ card: { card_type: 'error_log', part_of_speech: 'Grammar' } })
+    expect(await (await request('/cards/b')).json()).toMatchObject({ card: { part_of_speech: 'Grammar' } })
+    expect(sqlite.prepare("SELECT card_type, part_of_speech FROM flashcards WHERE id = 'b'").get())
+      .toEqual({ card_type: 'error_log', part_of_speech: 'Grammar' })
   })
 
   it('records explicit completion once and updates local-day goal and streak', async () => {

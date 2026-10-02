@@ -8,7 +8,7 @@ import { content, id, invalidInput, notFound, optionalContent, parseJson } from 
 const listInput = z.strictObject({
   card_type: z.enum(['vocabulary', 'error_log']).optional(),
   favorite: z.enum(['true', 'false']).optional(),
-  needs_review: z.enum(['true', 'false']).optional(),
+  needs_review: z.literal('true').optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().max(1024).optional(),
 })
@@ -53,8 +53,7 @@ cards.patch('/:id', async (c) => {
   const current = await repos.flashcards.find(c.get('user').id, c.req.param('id'))
   if (!current) return c.json(notFound, 404)
   if ((current.card_type === 'vocabulary' && input.data.explanation !== undefined) ||
-      (current.card_type === 'error_log' && (input.data.part_of_speech !== undefined ||
-        input.data.zh_tw_definition !== undefined))) return c.json(invalidInput, 400)
+      (current.card_type === 'error_log' && input.data.zh_tw_definition !== undefined)) return c.json(invalidInput, 400)
   const card = await repos.flashcards.update(c.get('user').id, c.req.param('id'),
     input.data, new Date().toISOString())
   return card ? c.json({ card }) : c.json(notFound, 404)

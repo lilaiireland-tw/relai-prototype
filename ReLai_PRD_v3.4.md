@@ -4,7 +4,7 @@
 
 **品牌歸屬**：哩來愛爾蘭（@lilaiireland）  
 **開發策略**：Vibe Coding / Codex Agent 輔助全端開發 / 敏捷開發  
-**最後更新**：2026-10-01
+**最後更新**：2026-10-02
 
 **文件角色**：產品需求、功能優先級與驗收條件的最高指導文件。工程實作與部署現況同時遵循根目錄的 `README.md`。
 
@@ -20,7 +20,7 @@
 
 ## 本文件與目前實作的邊界
 
-本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema、使用者／工作階段及卡片／複習／統計／設定的 D1 repository、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。現有 Worker API 僅提供健康檢查與驗證；學習畫面仍使用模擬資料或預留畫面。CEFR-J 目錄匯入、產品 API／畫面整合、Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署與 migration 狀態須由操作人員查核，不由本文件推定。
+本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema、使用者／工作階段及卡片／複習／統計／設定的 D1 repository、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。Issues #64、#65、#66 已提供 CEFR-J 1.6 目錄匯入工具、初始級別選擇／starter bootstrap API，以及經驗證的 Cards／Reviews／Stats／Settings API。前端產品畫面仍使用模擬資料或預留畫面，尚未整合 starter bootstrap 或產品 API。Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署、目錄匯入與 migration 狀態須由操作人員查核，不由本文件推定。
 
 目前的入口為 `/relaiapp/`，API 命名空間為 `/relaiapp/api/v1/*`。已實作的路由、指令、環境綁定與部署安全規則以根目錄 [README](README.md) 及其操作手冊為準。
 
@@ -842,7 +842,7 @@ Prefix：
 /relaiapp/api/v1
 ```
 
-目前已實作 `GET /health` 與下列 Auth 端點；Ingestion、Cards、Reviews、Stats、Settings 是後續產品 API 規格，尚未實作。
+目前已實作 `GET /health`、下列 Auth、Onboarding、Cards、Reviews、Stats、Settings 端點；Ingestion 仍為後續規格，尚未實作。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面尚未整合這些 API。
 
 ## Auth
 
@@ -853,7 +853,15 @@ GET  /auth/me
 POST /auth/change-password
 ```
 
-## Ingestion
+## Onboarding
+
+```text
+POST /onboarding/level
+```
+
+初始 CEFR-J 級別選擇會從共用目錄複製最多 100 張同級別 starter cards，支援重試與去重；詳見 [starter API](docs/onboarding-starter-api.md)。
+
+## Ingestion（尚未實作）
 
 ```text
 POST /ingestion/text
@@ -870,11 +878,15 @@ DELETE /cards/:id
 POST   /cards/:id/favorite
 ```
 
+`needs_review` 僅接受 `true`：從未複習或距離上次複習超過七天；省略表示不套用此篩選，`false` 與其他值回傳 400。PATCH 僅接受卡片類型適用的學習內容；Error Log 的錯誤類型透過既有 `part_of_speech` 欄位編輯。身分、卡片類型、目錄／來源連結、系統中繼資料與複習時間不可編輯。沒有手動建立卡片端點。
+
 ## Reviews
 
 ```text
 POST /reviews
 ```
+
+只有明確完成動作才提交事件；瀏覽或翻卡不產生複習。API 驗證卡片歸屬，以 `client_event_id` 保證重播不重複計數，並以 D1 batch transaction 寫入事件、卡片複習時間與統計。目前以伺服器接收時間計算複習與每日進度；離線佇列尚未實作。
 
 ## Stats
 
@@ -888,6 +900,8 @@ GET /stats/summary
 GET   /settings
 PATCH /settings
 ```
+
+支援 `daily_goal`、`timezone` 與初始選擇後的 `english_level` 變更；變更級別不刪除個人卡片，也不自動加入另一批 starter cards。
 
 ---
 
@@ -1439,12 +1453,11 @@ Cloudflare URL 可正常載入
 ## Phase 4 — Real Data（進行中）
 
 - 卡片／複習／統計／設定 D1 repository 已完成
-- CEFR-J A1–B2 catalog、使用者級別與去重連結 schema 已加入 migration；資料匯入與 starter bootstrap 尚未開始
-- cards API
-- settings
-- review
-- stats
-- mock data replacement
+- CEFR-J A1–B2 catalog、使用者級別與去重連結 schema 已加入 migration
+- CEFR-J 1.6 本機匯入工具與測試 fixture 已完成（#64）；詳見 [目錄匯入](docs/cefr-j-catalog-import.md)
+- 初始級別選擇與 starter bootstrap API 已完成（#65）
+- Cards／Reviews／Stats／Settings authenticated API 已完成（#66）
+- 前端仍使用 mock data／產品預留畫面；starter bootstrap 與產品 API 整合尚未完成
 
 ## Phase 5 — AI（尚未開始）
 
@@ -1590,4 +1603,4 @@ ReLai v1 的工程方向可以濃縮成：
 
 **文件版本：PRD v3.4 — CEFR-J A1–B2 schema 同步版**
 
-**最後更新：2026-10-01**
+**最後更新：2026-10-02**
