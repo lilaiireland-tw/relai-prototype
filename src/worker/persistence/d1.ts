@@ -1,6 +1,8 @@
 /** Structural subset of the D1 binding used by repositories; no runtime adapter. */
 export interface PersistenceDatabase {
   prepare(sql: string): PersistenceStatement
+  /** D1 runs a batch sequentially in one transaction; used by initial starter bootstrap. */
+  batch?(statements: PersistenceStatement[]): Promise<{ success: boolean; meta: { changes: number } }[]>
 }
 
 export type SqlValue = string | number | null

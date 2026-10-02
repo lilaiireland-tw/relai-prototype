@@ -123,7 +123,8 @@ describe('product persistence with local SQLite D1 transport', () => {
   it('creates settings with schema daily goal and scopes individual and combined updates', async () => {
     expect(await repos.userSettings.find('one')).toBeNull()
     const initial = await repos.userSettings.getOrCreate('one', 'Europe/Dublin', at)
-    expect(initial).toEqual({ user_id: 'one', daily_goal: 10, timezone: 'Europe/Dublin', created_at: at, updated_at: at })
+    expect(initial).toEqual({ user_id: 'one', daily_goal: 10, timezone: 'Europe/Dublin',
+      english_level: null, created_at: at, updated_at: at })
     expect(await repos.userSettings.getOrCreate('one', 'UTC', later)).toEqual(initial)
     await repos.userSettings.getOrCreate('two', 'UTC', at)
     expect(await repos.userSettings.update('missing', { daily_goal: 5 }, later)).toBeNull()

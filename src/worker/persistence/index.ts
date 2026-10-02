@@ -18,6 +18,6 @@ export { tokenDigest } from './types'
 export type { CreateSessionInput, CreateUserInput, UpdateCredentialInput, SessionRow, UserRow, TokenDigest } from './types'
 export type { MutationResult, PersistenceDatabase } from './d1'
 export type { CardType, EditableFlashcard, FlashcardRow, CreateReviewEventInput,
-  ReviewEventRow, UserStatsRow, StatsCounters, UserSettingsRow } from './types'
+  ReviewEventRow, UserStatsRow, StatsCounters, UserSettingsRow, EnglishLevel } from './types'
 export type { CardCursor, CardListQuery } from './flashcards'
 export type { ReviewInsertResult } from './review-events'

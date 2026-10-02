@@ -52,6 +52,7 @@ export type CreateSessionInput = Omit<SessionRow, 'last_seen_at'> &
   Partial<Pick<SessionRow, 'last_seen_at'>>
 
 export type CardType = 'vocabulary' | 'error_log'
+export type EnglishLevel = 'A1' | 'A2' | 'B1' | 'B2'
 
 export interface FlashcardRow {
   id: string
@@ -104,6 +105,7 @@ export interface UserSettingsRow {
   user_id: string
   daily_goal: number
   timezone: string
+  english_level: EnglishLevel | null
   created_at: string
   updated_at: string
 }
