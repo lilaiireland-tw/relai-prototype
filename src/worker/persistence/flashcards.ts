@@ -21,6 +21,12 @@ export interface CardListQuery {
 
 export function createFlashcardsRepository(db: PersistenceDatabase) {
   return {
+    async count(userId: string): Promise<number> {
+      const row = await db.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?')
+        .bind(userId).first<{ count: number }>()
+      if (!row) throw new Error('Persistence card count failed.')
+      return row.count
+    },
     async list(userId: string, query: CardListQuery = {}): Promise<{ cards: FlashcardRow[]; nextCursor: CardCursor | null }> {
       const limit = Math.min(100, Math.max(1, Math.trunc(query.limit ?? 20)))
       if (!Number.isFinite(limit)) throw new Error('Invalid card limit.')
