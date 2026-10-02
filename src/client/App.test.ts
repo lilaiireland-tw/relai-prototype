@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRouter } from './App'
 import { clientData } from './services/data'
+import { productServer } from './testing/product-server'
 
 const user = { id: 'test-user', username: 'Alex', display_name: 'Alex', role: 'user', must_change_password: false }
 const authResponse = () => Response.json({ user })
@@ -11,10 +12,12 @@ const authResponse = () => Response.json({ user })
 describe('migrated client under /relaiapp', () => {
   let container: HTMLDivElement
   let root: Root
+  let server: ReturnType<typeof productServer>
   beforeEach(() => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     vi.stubEnv('BASE_URL', '/relaiapp/')
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => url.endsWith('/auth/logout') ? new Response(null, { status: 204 }) : url.includes('/auth/') ? authResponse() : Response.json({ status: 'ok' })))
+    server = productServer()
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => url.endsWith('/auth/logout') ? new Response(null, { status: 204 }) : url.includes('/auth/') ? authResponse() : server.response(url)))
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
@@ -73,7 +76,7 @@ describe('migrated client under /relaiapp', () => {
     vi.mocked(fetch).mockImplementation(async url => {
       if (String(url).endsWith('/auth/change-password')) { changed = true; return Response.json({ user: { ...user, must_change_password: false } }) }
       if (String(url).endsWith('/auth/me')) return Response.json({ user: { ...user, must_change_password: !changed } })
-      return Response.json({ status: 'ok' })
+      return server.response(String(url))
     })
     await renderAt('/relaiapp/home')
     expect(window.location.pathname).toBe('/relaiapp/change-password')
@@ -203,7 +206,7 @@ describe('migrated client under /relaiapp', () => {
     let resolveMe!: (response: Response) => void
     vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me')
       ? new Promise(resolve => { resolveMe = resolve })
-      : Promise.resolve(String(url).endsWith('/auth/login') ? authResponse() : Response.json({ status: 'ok' })))
+      : Promise.resolve(String(url).endsWith('/auth/login') ? authResponse() : server.response(String(url))))
     await renderAt('/relaiapp/login')
     await input('username', 'Alex')
     await input('password', 'Secret')
@@ -254,7 +257,7 @@ describe('migrated client under /relaiapp', () => {
     await renderAt(`/relaiapp/${path}`)
     expect(container.textContent).toContain(content)
     if (['cards', 'flashcards', 'error-log'].includes(path)) {
-      expect(container.querySelector('[data-source="mock"]')?.textContent).toContain('模擬資料')
+      expect(container.querySelector('[data-source="api"]')).not.toBeNull()
       expect(fetch).toHaveBeenCalledWith('/relaiapp/api/v1/auth/me', expect.objectContaining({ credentials: 'same-origin' }))
     }
     if (path === 'flashcards') expect(window.location.pathname).toBe('/relaiapp/cards')
@@ -265,7 +268,7 @@ describe('migrated client under /relaiapp', () => {
       if (String(url).endsWith('/auth/me')) return new Response(null, { status: 401 })
       if (String(url).endsWith('/auth/logout')) return new Response(null, { status: 204 })
       if (String(url).endsWith('/auth/login')) return authResponse()
-      return Response.json({ status: 'ok' })
+      return server.response(String(url))
     })
     await renderAt('/relaiapp/login')
     await input('username', ' Alex ')
@@ -346,7 +349,7 @@ describe('migrated client under /relaiapp', () => {
     vi.spyOn(clientData, 'listCards').mockResolvedValue([])
     await renderAt('/relaiapp/cards')
     expect(container.textContent).toContain('目前沒有 vocabulary 卡片')
-    expect(button('下一張')?.hasAttribute('disabled')).toBe(true)
+    expect(button('下一張')).toBeNull()
     vi.spyOn(clientData, 'getHome').mockRejectedValue(new Error('private backend detail'))
     await click(container.querySelector('a'))
     expect(container.textContent).toContain('讀取資料失敗')
@@ -356,16 +359,16 @@ describe('migrated client under /relaiapp', () => {
     await renderAt('/relaiapp/unknown')
     expect(container.textContent).toContain('找不到頁面')
   })
-  it('shows real health loading/success while product data remains mock', async () => {
+  it('shows real health loading/success independently of product data', async () => {
     let resolveHealth!: (value: Response) => void
-    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : new Promise<Response>(resolve => { resolveHealth = resolve }))
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : String(url).endsWith('/health') ? new Promise<Response>(resolve => { resolveHealth = resolve }) : Promise.resolve(server.response(String(url))))
     await renderAt('/relaiapp/home')
     const healthPanel = container.querySelector('[aria-label="Worker 連線"]')!
     expect(healthPanel.getAttribute('data-source')).toBe('api')
     expect(healthPanel.textContent).toContain('真實 API')
     expect(healthPanel.textContent).toContain('正在檢查服務連線')
     expect(button('重新檢查連線')?.hasAttribute('disabled')).toBe(true)
-    expect(container.querySelector('[data-source="mock"]')?.textContent).toContain('首頁、卡片、統計與設定：模擬資料')
+    expect(container.querySelector('[data-source="mock"]')).toBeNull()
     expect(container.textContent).toContain('serendipity')
     await act(() => resolveHealth(Response.json({ status: 'ok' })))
     expect(healthPanel.textContent).toContain('health: ok')
@@ -379,8 +382,8 @@ describe('migrated client under /relaiapp', () => {
     let failHealth = true
     vi.mocked(fetch).mockImplementation(url => {
       if (String(url).endsWith('/auth/me')) return Promise.resolve(authResponse())
-      if (failHealth) { failHealth = false; return failure() }
-      return Promise.resolve(Response.json({ status: 'ok' }))
+      if (String(url).endsWith('/health') && failHealth) { failHealth = false; return failure() }
+      return Promise.resolve(server.response(String(url)))
     })
     await renderAt('/relaiapp/home')
     expect(container.querySelector('[role="status"]')?.textContent).toContain('無法連線至服務')
@@ -389,16 +392,16 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain('已完成 6 次複習')
     await click(button('重新檢查連線'))
     expect(container.querySelector('[role="status"]')?.textContent).toContain('health: ok')
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/health'))).toHaveLength(2)
   })
   it('ignores a health result after navigating away from Home', async () => {
     let resolveHealth!: (value: Response) => void
-    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : new Promise<Response>(resolve => { resolveHealth = resolve }))
+    vi.mocked(fetch).mockImplementation(url => String(url).endsWith('/auth/me') ? Promise.resolve(authResponse()) : String(url).endsWith('/health') ? new Promise<Response>(resolve => { resolveHealth = resolve }) : Promise.resolve(server.response(String(url))))
     await renderAt('/relaiapp/home')
     await click(container.querySelector('nav a[href="/relaiapp/cards"]'))
     await act(() => resolveHealth(Response.json({ status: 'ok' })))
     expect(container.querySelector('[aria-label="Worker 連線"]')).toBeNull()
     expect(container.textContent).toContain('serendipity')
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/health'))).toHaveLength(1)
   })
 })

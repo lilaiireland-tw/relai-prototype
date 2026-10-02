@@ -1,4 +1,5 @@
-import type { Flashcard, HomeData } from "./types";
+// Test-only transport fixtures; never imported by application code.
+import type { Flashcard, HomeData } from "../services/types";
 const vocabulary = [
   {
     id: "vocab-1",
@@ -87,8 +88,9 @@ const cards: Flashcard[] = [
     front_content: card.wrongSentence, back_content: card.correctSentence, part_of_speech: card.errorType,
     zh_tw_definition: null, explanation: card.explanation, irish_usage: null })),
 ];
-export const mockHome: HomeData = {
-  cards, today_reviews: 6,
-  stats: { streak_days: 7, total_reviews: 126, total_cards_created: cards.length },
-  settings: { daily_goal: 10, timezone: 'Asia/Taipei' },
+export const fixtureHome: HomeData = {
+  cards,
+  stats: { streak_days: 7, longest_streak: 9, total_reviews: 126, total_cards_created: cards.length,
+    total_cards: cards.length, today_completed_reviews: 6, daily_goal: 10, today_progress: 6, daily_goal_completed: false },
+  settings: { daily_goal: 10, timezone: 'Asia/Taipei', english_level: 'A2' },
 };

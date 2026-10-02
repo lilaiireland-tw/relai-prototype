@@ -15,11 +15,12 @@ import ProgressRing from "../components/ProgressRing";
 import { useAuthSession } from "../components/AuthSession";
 import { clientData } from "../services/data";
 import WorkerHealth from "../components/WorkerHealth";
+import DataState from "../components/DataState";
 
 export default function HomePage() {
   const { state } = useAuthSession();
   const profile = state.user;
-  const { data: bootstrap, error, reload: refreshBootstrap } = useClientData(() => clientData.getHome());
+  const { data: bootstrap, loading, error, reload: refreshBootstrap } = useClientData(clientData.getHome);
   const flashcards = bootstrap?.cards ?? [];
 
   const vocabularyCards = useMemo(
@@ -34,9 +35,11 @@ export default function HomePage() {
   const stats = bootstrap?.stats;
   const settings = bootstrap?.settings;
   const dailyGoal = settings?.daily_goal ?? 10;
-  const completedReviews = Math.min(bootstrap?.today_reviews ?? 0, dailyGoal);
+  const completedReviews = stats?.today_completed_reviews ?? 0;
   const progressPercent =
     dailyGoal > 0 ? Math.min(100, Math.round((completedReviews / dailyGoal) * 100)) : 0;
+
+  if (!bootstrap) return <div className="flex flex-1 flex-col"><main className="flex-1 p-5"><h1 className="text-xl font-bold">ReLai</h1><DataState loading={loading} error={error} retry={refreshBootstrap} /></main><BottomNav /></div>;
 
   return (
     <>
@@ -44,7 +47,7 @@ export default function HomePage() {
         <header className="flex items-center justify-between px-5 pt-6">
           <div>
             <h1 className="text-xl font-bold text-text-primary">ReLai</h1>
-            <p data-source={clientData.source} className="text-sm text-text-secondary">首頁、卡片、統計與設定：模擬資料</p>
+            <p data-source={clientData.source} className="text-sm text-text-secondary">你的學習進度</p>
           </div>
           <button
             type="button"
@@ -58,6 +61,8 @@ export default function HomePage() {
 
         <main className="flex-1 overflow-y-auto px-5 pb-6">
           <WorkerHealth />
+          <DataState loading={loading} error={error} retry={refreshBootstrap} />
+          <div className="mt-3 flex gap-5 text-sm text-irish-green"><Link to="/stats">學習統計</Link><Link to="/settings">設定</Link></div>
           <div className="mt-5 rounded-2xl border border-gray-100 bg-card-gray p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-irish-green">
@@ -82,6 +87,7 @@ export default function HomePage() {
               <div className="flex flex-col gap-2 text-sm">
                 <p className="font-semibold text-text-primary">已完成 {completedReviews} 次複習</p>
                 <p className="text-text-secondary">連續學習 {stats?.streak_days ?? 0} 天</p>
+                <p className="text-text-secondary">最長連續 {stats?.longest_streak ?? 0} 天 · 級別 {settings?.english_level}</p>
                 <p className="text-text-secondary">累計建立 {stats?.total_cards_created ?? 0} 張卡片</p>
               </div>
             </div>
@@ -154,11 +160,6 @@ export default function HomePage() {
             </div>
           </section>
 
-          {error ? (
-            <div className="mt-6 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
-              {error}
-            </div>
-          ) : null}
         </main>
 
         <BottomNav />

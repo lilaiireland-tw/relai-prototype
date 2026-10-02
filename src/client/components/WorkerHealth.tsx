@@ -28,7 +28,7 @@ export default function WorkerHealth() {
       {state.phase === 'loading' ? '正在檢查服務連線…' :
         state.phase === 'success' ? '服務已連線（health: ok）' : state.message}
     </div>
-    <p className="mt-1 text-xs text-text-secondary">僅檢查服務可用性；首頁、卡片、統計與設定仍為模擬資料。</p>
+    <p className="mt-1 text-xs text-text-secondary">僅檢查服務可用性。</p>
     <button type="button" disabled={state.phase === 'loading'} className="mt-2 text-irish-green disabled:opacity-50" onClick={() => {
       setState({ phase: 'loading' })
       setRevision(value => value + 1)

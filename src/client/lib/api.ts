@@ -1,7 +1,10 @@
+import { cardResponse, cardsResponse, reviewResponse, settingsResponse, starterResponse, statsResponse } from './product-contract'
+import type { CardFilter, CardPatch, EnglishLevel, ReviewInput, Settings } from '../services/types'
 export const API_BASE_PATH = '/relaiapp/api/v1'
 
 // Only the existing Worker contract is exposed. Add paths when APIs exist.
-type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout' | '/auth/change-password'
+type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout' | '/auth/change-password' |
+ '/onboarding/level' | '/settings' | '/stats/summary' | '/reviews' | '/cards' | `/cards?${string}` | `/cards/${string}`
 export function apiUrl(path: ApiPath): string {
   return `${API_BASE_PATH}${path}`
 }
@@ -37,11 +40,11 @@ export class ApiError extends Error {
 
 export function createApiClient(transport: typeof fetch = (...args) => globalThis.fetch(...args)) {
   const unauthorizedListeners = new Set<() => void>()
-  async function request(path: ApiPath, body?: LoginInput | ChangePasswordInput): Promise<Response> {
+  async function request(path: ApiPath, body?: object, method = body || path === '/auth/logout' ? 'POST' : 'GET'): Promise<Response> {
     let response: Response
     try {
       response = await transport(apiUrl(path), {
-        method: body || path === '/auth/logout' ? 'POST' : 'GET',
+        method,
         mode: 'same-origin',
         // The browser exclusively manages the HttpOnly session cookie.
         credentials: 'same-origin',
@@ -61,8 +64,8 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     }
     return response
   }
-  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: LoginInput | ChangePasswordInput): Promise<T> {
-    const response = await request(path, body)
+  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: object, method?: string): Promise<T> {
+    const response = await request(path, body, method)
     try {
       const value: unknown = await response.json()
       return decode(value)
@@ -72,6 +75,30 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
   }
 
   return {
+    selectLevel(english_level: EnglishLevel) {
+      return getJson('/onboarding/level', value => starterResponse.parse(value), { english_level })
+    },
+    getSettings() { return getJson('/settings', value => settingsResponse.parse(value).settings) },
+    updateSettings(input: Partial<Settings>) {
+      return getJson('/settings', value => settingsResponse.parse(value).settings, input, 'PATCH')
+    },
+    getStats() { return getJson('/stats/summary', value => statsResponse.parse(value)) },
+    listCards(filter: CardFilter = 'all', cursor?: string) {
+      const query = new URLSearchParams({ limit: '100' })
+      if (filter === 'vocabulary' || filter === 'error_log') query.set('card_type', filter)
+      if (filter === 'favorites') query.set('favorite', 'true')
+      if (filter === 'needs_review') query.set('needs_review', 'true')
+      if (cursor) query.set('cursor', cursor)
+      return getJson(`/cards?${query}`, value => cardsResponse.parse(value))
+    },
+    updateCard(id: string, input: CardPatch) {
+      return getJson(`/cards/${encodeURIComponent(id)}`, value => cardResponse.parse(value).card, input, 'PATCH')
+    },
+    setFavorite(id: string, favorite: boolean) {
+      return getJson(`/cards/${encodeURIComponent(id)}/favorite`, value => cardResponse.parse(value).card, { favorite })
+    },
+    async deleteCard(id: string) { await request(`/cards/${encodeURIComponent(id)}`, undefined, 'DELETE') },
+    completeReview(input: ReviewInput) { return getJson('/reviews', value => reviewResponse.parse(value), input) },
     onUnauthorized(listener: () => void) {
       unauthorizedListeners.add(listener)
       return () => { unauthorizedListeners.delete(listener) }
