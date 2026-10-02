@@ -27,7 +27,7 @@ export default function Login() {
   <div className="mt-8 text-center">
    <p className="text-sm text-text-secondary">哩來語感特訓</p>
    <h2 className="mt-3 text-2xl font-semibold">登入你的帳號</h2>
-   <p className="mt-2 text-sm leading-relaxed text-text-secondary">請使用 ReLai 提供的測試帳號與密碼登入。學習內容目前使用模擬資料。</p>
+   <p className="mt-2 text-sm leading-relaxed text-text-secondary">請使用 ReLai 提供的測試帳號與密碼登入。</p>
   </div>
   <form onSubmit={submit} className="mt-8 flex flex-col gap-4">
    <label className="flex flex-col gap-2 text-sm">使用者名稱

@@ -1,13 +1,13 @@
 # ReLai（哩來語感特訓）
 
-ReLai 是「哩來愛爾蘭」面向在愛爾蘭學英文的臺灣學習者所開發的封閉測試（Closed Beta）原型。產品目標是把使用者接觸的單字與英文錯誤整理成值得反覆複習的卡片。D1 repository、CEFR-J 匯入工具、starter bootstrap 與產品 API 已建立；前端產品畫面仍使用模擬資料或預留畫面，尚未整合這些 API。
+ReLai 是「哩來愛爾蘭」面向在愛爾蘭學英文的臺灣學習者所開發的封閉測試（Closed Beta）原型。產品目標是把使用者接觸的單字與英文錯誤整理成值得反覆複習的卡片。D1 repository、CEFR-J 匯入工具、starter bootstrap 與產品 API 已建立；前端 onboarding、首頁、卡片、Error Log、統計與設定已接入 authenticated API。
 
 ## 目前已實作的應用程式
 
 - 前端使用 React、TypeScript、Vite、React Router 與 Tailwind CSS，入口位於 `/relaiapp/`。
 - 單一 Cloudflare Worker 在相同來源提供靜態前端及 Hono API；API 路徑以 `/relaiapp/api/v1/*` 開頭。
 - 目前的 API 提供健康檢查、身分驗證、初始 CEFR-J 級別選擇／starter bootstrap，以及經驗證的 Cards、Reviews、Stats、Settings API。健康檢查只代表 Worker 可回應，不代表 D1 或產品功能已就緒。
-- Cloudflare D1 的使用者、工作階段、卡片、複習、統計與設定 repository 已接入對應 API。CEFR-J A1–B2 共用目錄 schema 與本機匯入工具已建立；遠端匯入與部署狀態須另行查核。前端產品畫面尚未接入 starter bootstrap 或產品 API。
+- Cloudflare D1 的使用者、工作階段、卡片、複習、統計與設定 repository 已接入對應 API。CEFR-J A1–B2 共用目錄 schema 與本機匯入工具已建立；遠端匯入與部署狀態須另行查核。前端使用這些 API，不以 fixture 作為失敗時的備援資料。
 - Gemini 是後續 AI 擷取功能預定使用的供應商；AI 擷取及 PWA／離線功能尚未實作。
 
 ## 封閉測試帳號與登入
@@ -28,7 +28,7 @@ Worker 使用不透明、有效期七天的工作階段 cookie，設定 `HttpOnl
 ## 儲存庫結構
 
 ```text
-src/client/          React 頁面、登入狀態、API client 與模擬產品資料
+src/client/          React 頁面、登入／產品狀態、API client 與僅供測試的 fixtures
 src/worker/          Hono API、驗證、工作階段 middleware 與 D1 repository
 migrations/          僅追加的 D1 SQL migration
 scripts/             帳號管理 CLI、驗證工具與測試
@@ -74,10 +74,10 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - 平台與執行環境：已完成。
 - D1 基礎與封閉測試身分驗證：已完成。
 - 暫時密碼與首次登入變更密碼流程：已完成。
-- 卡片、複習、統計與設定的 D1 repository 與 authenticated API：已完成；前端仍使用模擬資料或預留畫面，產品 API 整合尚未開始。
+- 卡片、複習、統計與設定的 D1 repository 與 authenticated API：已完成；前端已整合篩選、收藏、內容編輯、確認刪除與明確完成複習，首頁／統計／設定使用真實資料。
 - CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入尚未執行。
 - CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
-- 初始級別選擇與 starter cards：已提供 authenticated API，從共用目錄複製最多 100 張至使用者卡片，並保護重試與重複字詞；尚未建立前端 onboarding。行為見 [starter API](docs/onboarding-starter-api.md)。
+- 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 從共用目錄複製最多 100 張同級別卡片，並保護重試與重複字詞；已選級別不再顯示 onboarding。行為見 [starter API](docs/onboarding-starter-api.md)。
 - 後續階段：Gemini 擷取及 PWA／離線支援。
 
 Cards API 的 `needs_review` 僅接受 `true`（從未複習或超過七天未複習）；省略表示不套用此篩選，`false` 回傳 400。卡片 PATCH 僅允許學習內容欄位；Error Log 的錯誤類型使用既有 `part_of_speech` 儲存欄位。複習由明確完成動作提交，具備事件冪等性與 D1 batch transaction；設定級別變更不刪除卡片或新增 starter pack。

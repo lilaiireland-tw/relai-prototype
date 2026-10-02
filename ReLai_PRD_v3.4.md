@@ -20,7 +20,7 @@
 
 ## 本文件與目前實作的邊界
 
-本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema、使用者／工作階段及卡片／複習／統計／設定的 D1 repository、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。Issues #64、#65、#66 已提供 CEFR-J 1.6 目錄匯入工具、初始級別選擇／starter bootstrap API，以及經驗證的 Cards／Reviews／Stats／Settings API。前端產品畫面仍使用模擬資料或預留畫面，尚未整合 starter bootstrap 或產品 API。Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署、目錄匯入與 migration 狀態須由操作人員查核，不由本文件推定。
+本 PRD 同時記載 v1 產品需求及後續階段設計；下文的功能清單、API 草案與流程圖不表示所有功能均已上線。目前已完成 React／Vite／Worker 平台、D1 schema、使用者／工作階段及卡片／複習／統計／設定的 D1 repository、封閉測試登入，以及暫時密碼與首次登入強制變更密碼。Issues #64、#65、#66 已提供 CEFR-J 1.6 目錄匯入工具、初始級別選擇／starter bootstrap API，以及經驗證的 Cards／Reviews／Stats／Settings API。Issue #67 已整合前端 A1/A2/B1/B2 onboarding、產品 API 與明確完成複習。Gemini 擷取與 PWA／離線功能尚未實作。即時遠端部署、目錄匯入與 migration 狀態須由操作人員查核，不由本文件推定。
 
 目前的入口為 `/relaiapp/`，API 命名空間為 `/relaiapp/api/v1/*`。已實作的路由、指令、環境綁定與部署安全規則以根目錄 [README](README.md) 及其操作手冊為準。
 
@@ -842,7 +842,7 @@ Prefix：
 /relaiapp/api/v1
 ```
 
-目前已實作 `GET /health`、下列 Auth、Onboarding、Cards、Reviews、Stats、Settings 端點；Ingestion 仍為後續規格，尚未實作。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面尚未整合這些 API。
+目前已實作 `GET /health`、下列 Auth、Onboarding、Cards、Reviews、Stats、Settings 端點；Ingestion 仍為後續規格，尚未實作。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
 
 ## Auth
 
@@ -1128,7 +1128,7 @@ Closed Beta 不需要 signup onboarding。目前已實作首次登入強制變�
 /relaiapp/settings
 ```
 
-目前卡片與 Error Log 畫面使用模擬資料；統計與設定的產品功能仍是預留畫面，但設定頁面可進入已實作的變更密碼流程。
+目前首頁、卡片、Error Log、統計與設定均使用 authenticated API；設定頁面亦可進入變更密碼流程。未選級別的使用者完成必要的密碼變更後，先進入 `/relaiapp/onboarding` 選擇 A1/A2/B1/B2。
 
 Future：
 
@@ -1457,7 +1457,7 @@ Cloudflare URL 可正常載入
 - CEFR-J 1.6 本機匯入工具與測試 fixture 已完成（#64）；詳見 [目錄匯入](docs/cefr-j-catalog-import.md)
 - 初始級別選擇與 starter bootstrap API 已完成（#65）
 - Cards／Reviews／Stats／Settings authenticated API 已完成（#66）
-- 前端仍使用 mock data／產品預留畫面；starter bootstrap 與產品 API 整合尚未完成
+- 前端 starter bootstrap 與產品 API 整合已實作（#67）；卡片翻面／瀏覽不建立複習，僅明確完成動作提交 review event
 
 ## Phase 5 — AI（尚未開始）
 

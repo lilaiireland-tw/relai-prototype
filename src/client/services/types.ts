@@ -8,13 +8,18 @@ export interface Flashcard {
  last_reviewed_at: string | null; next_review_at: string | null
  created_at: string; updated_at: string
 }
-export interface HomeData {
- cards: Flashcard[]; today_reviews: number
- stats: { streak_days: number; total_reviews: number; total_cards_created: number }
- settings: { daily_goal: number; timezone: string }
+export const ENGLISH_LEVELS = ['A1', 'A2', 'B1', 'B2'] as const
+export type EnglishLevel = typeof ENGLISH_LEVELS[number]
+export interface Settings {
+ daily_goal: number; timezone: string; english_level: EnglishLevel | null
 }
-export interface ClientDataService {
- readonly source: 'mock' | 'api'
- getHome(): Promise<HomeData>
- listCards(type: Flashcard['card_type']): Promise<Flashcard[]>
+export interface StatsSummary {
+ streak_days: number; longest_streak: number; total_cards: number
+ total_cards_created: number; total_reviews: number; today_completed_reviews: number
+ daily_goal: number; today_progress: number; daily_goal_completed: boolean
 }
+export interface HomeData { cards: Flashcard[]; stats: StatsSummary; settings: Settings }
+export type CardFilter = 'all' | 'vocabulary' | 'error_log' | 'favorites' | 'needs_review'
+export type CardPatch = Partial<Pick<Flashcard, 'front_content' | 'back_content' |
+ 'part_of_speech' | 'zh_tw_definition' | 'explanation' | 'irish_usage'>>
+export interface ReviewInput { client_event_id: string; card_id: string; review_result: 'viewed' }

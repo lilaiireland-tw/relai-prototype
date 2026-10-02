@@ -37,7 +37,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
   void retry()
   return () => { ++generation.current; unsubscribe() }
  }, [retry])
- // Mock product data makes no authenticated requests; recheck on returning to the app.
+ // Recheck session and password requirements when returning to the app.
  useEffect(() => {
   if (state.status !== 'authenticated') return
   const check = () => { void retry() }
