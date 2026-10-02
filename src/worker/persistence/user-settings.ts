@@ -2,7 +2,7 @@ import { mutate, type PersistenceDatabase } from './d1'
 import type { UserSettingsRow } from './types'
 
 const columns = 'user_id, daily_goal, timezone, english_level, created_at, updated_at'
-type SettingsPatch = Partial<Pick<UserSettingsRow, 'daily_goal' | 'timezone'>>
+type SettingsPatch = Partial<Pick<UserSettingsRow, 'daily_goal' | 'timezone' | 'english_level'>>
 
 export function createUserSettingsRepository(db: PersistenceDatabase) {
   const find = (userId: string): Promise<UserSettingsRow | null> =>
@@ -17,7 +17,7 @@ export function createUserSettingsRepository(db: PersistenceDatabase) {
       return row
     },
     async update(userId: string, patch: SettingsPatch, updatedAt: string): Promise<UserSettingsRow | null> {
-      const fields = (['daily_goal', 'timezone'] as const).filter(key => patch[key] !== undefined)
+      const fields = (['daily_goal', 'timezone', 'english_level'] as const).filter(key => patch[key] !== undefined)
       if (fields.length === 0) throw new Error('Empty settings update.')
       const row = await db.prepare(`UPDATE user_settings SET ${fields.map(key => `${key} = ?`).join(', ')},
         updated_at = ? WHERE user_id = ? RETURNING ${columns}`)

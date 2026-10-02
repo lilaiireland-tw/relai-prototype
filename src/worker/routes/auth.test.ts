@@ -506,12 +506,17 @@ describe('closed-beta auth API', () => {
     expectCookie(response, true, true)
   })
 
-  it('keeps health public and unknown/register/product routes safely absent', async () => {
+  it('keeps health public, unknown routes absent, and product routes guarded', async () => {
     expect((await app.request('/relaiapp/api/v1/health')).status).toBe(200)
-    for (const path of ['/auth/register', '/auth/signup', '/unknown', '/cards', '/stats', '/settings']) {
+    for (const path of ['/auth/register', '/auth/signup', '/unknown']) {
       const response = await request(path, { method: 'POST' })
       expect(response.status).toBe(404)
       expect(await response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'API route not found.' } })
+    }
+    for (const path of ['/cards', '/stats', '/settings']) {
+      const response = await request(path, { method: 'POST' })
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual(unauthorized)
     }
   })
 
