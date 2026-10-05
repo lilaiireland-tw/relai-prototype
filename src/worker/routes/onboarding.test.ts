@@ -13,11 +13,15 @@ const fixture = JSON.parse(readFileSync('scripts/fixtures/cefr-j-1.6-small.json'
 }
 const now = '2026-10-02T10:00:00.000Z'
 
-function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
+function sqliteD1(sqlite: DatabaseSync, starterBindings: number[]): PersistenceDatabase {
   type Executable = PersistenceStatement & { execute(): { changes: number | bigint } }
   function statement(sql: string, values: SqlValue[] = []): Executable {
     return {
-      bind: (...bound) => statement(sql, bound),
+      bind: (...bound) => {
+        if (bound.length > 100) throw new Error('D1 bound-parameter limit exceeded')
+        if (sql.includes('INSERT INTO flashcards')) starterBindings.push(bound.length)
+        return statement(sql, bound)
+      },
       async first<T>() { return (sqlite.prepare(sql).get(...values) as T | undefined) ?? null },
       async all<T>() { return { success: true, results: sqlite.prepare(sql).all(...values) as T[] } },
       async run() { return { success: true, meta: { changes: Number(sqlite.prepare(sql).run(...values).changes) } } },
@@ -46,6 +50,7 @@ describe('initial CEFR-J onboarding API', () => {
   let db: PersistenceDatabase
   let app: ReturnType<typeof createApp>
   let sessions: ReturnType<typeof createRepositories>
+  let starterBindings: number[]
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -55,7 +60,8 @@ describe('initial CEFR-J onboarding API', () => {
     for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()) {
       sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
     }
-    db = sqliteD1(sqlite)
+    starterBindings = []
+    db = sqliteD1(sqlite, starterBindings)
     sessions = createRepositories(db)
     app = createApp()
   })
@@ -100,6 +106,80 @@ describe('initial CEFR-J onboarding API', () => {
       body: JSON.stringify({ english_level: level, ...extra }),
     }, { DB: db, AUTH_PEPPER: 'synthetic' })
   }
+
+  const seedFullPack = (sqlite: DatabaseSync) => {
+    for (let index = 0; index < 100; index++) {
+      addCatalog(sqlite, `full-${index}`, `word-${String(index).padStart(3, '0')}`, 'B1')
+    }
+  }
+
+  it('creates full 100-card packs under the D1 parameter limit for retries and a second user', async () => {
+    expect(STARTER_BATCH_SIZE).toBe(100)
+    seedFullPack(sqlite)
+    const firstCookie = await createSession('first')
+    const secondCookie = await createSession('second')
+    // Both requests can read unclaimed settings before either batch runs.
+    const responses = await Promise.all([choose('B1', firstCookie), choose('B1', firstCookie)])
+    expect(responses.map(response => response.status)).toEqual([200, 200])
+    const bodies = await Promise.all(responses.map(response => response.json()))
+    expect(bodies).toContainEqual({ english_level: 'B1', starter_cards_created: 100, already_selected: false })
+    expect(bodies).toContainEqual({ english_level: 'B1', starter_cards_created: 0, already_selected: true })
+    expect(await (await choose('B1', firstCookie)).json())
+      .toEqual({ english_level: 'B1', starter_cards_created: 0, already_selected: true })
+    expect(await (await choose('B1', secondCookie)).json())
+      .toEqual({ english_level: 'B1', starter_cards_created: 100, already_selected: false })
+    for (const userId of ['first', 'second']) {
+      expect(cardRows(sqlite, userId)).toHaveLength(100)
+      expect(sqlite.prepare('SELECT total_cards_created FROM user_stats WHERE user_id = ?').get(userId))
+        .toEqual({ total_cards_created: 100 })
+    }
+    expect(starterBindings.length).toBeGreaterThanOrEqual(6)
+    expect(starterBindings.every(count => count < 100)).toBe(true)
+  })
+
+  it.each([[0, 47], [47, 94], [94, 100], [0, 100]])(
+    'counts actual inserts when existing cards occupy positions %i through %i', async (start, end) => {
+      seedFullPack(sqlite)
+      const cookie = await createSession('owner')
+      await sessions.userSettings.getOrCreate('owner', 'Europe/Dublin', now)
+      await sessions.userStats.getOrCreate('owner', now)
+      sqlite.prepare("UPDATE user_stats SET total_cards_created = 200 WHERE user_id = 'owner'").run()
+      for (let index = start; index < end; index++) {
+        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
+          vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
+          VALUES (?, 'owner', 'vocabulary', 'existing', 'keep me', ?, ?, ?, ?)`)
+          .run(`existing-${index}`, `full-${index}`, `word-${String(index).padStart(3, '0')}`, now, now)
+      }
+      const created = 100 - (end - start)
+      expect(await (await choose('B1', cookie)).json())
+        .toEqual({ english_level: 'B1', starter_cards_created: created, already_selected: false })
+      expect(cardRows(sqlite, 'owner')).toHaveLength(100)
+      expect(sqlite.prepare("SELECT total_cards_created FROM user_stats WHERE user_id = 'owner'").get())
+        .toEqual({ total_cards_created: 200 + created })
+      expect(await (await choose('B1', cookie)).json())
+        .toEqual({ english_level: 'B1', starter_cards_created: 0, already_selected: true })
+      expect(sqlite.prepare("SELECT total_cards_created FROM user_stats WHERE user_id = 'owner'").get())
+        .toEqual({ total_cards_created: 200 + created })
+      expect(await sessions.userSettings.find('owner')).toMatchObject({ english_level: 'B1', timezone: 'Europe/Dublin' })
+    })
+
+  it.each(['later insert', 'level claim'])('rolls back all chunks and stats after a failed %s', async failure => {
+    seedFullPack(sqlite)
+    const cookie = await createSession('owner')
+    sqlite.exec(failure === 'later insert'
+      ? `CREATE TRIGGER reject_starter BEFORE INSERT ON flashcards
+          WHEN NEW.vocabulary_key = 'word-050'
+          BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`
+      : `CREATE TRIGGER reject_claim BEFORE INSERT ON user_settings
+          BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`)
+    expect((await choose('B1', cookie)).status).toBe(500)
+    expect(cardRows(sqlite, 'owner')).toHaveLength(0)
+    expect(await sessions.userStats.find('owner')).toBeNull()
+    expect(await sessions.userSettings.find('owner')).toBeNull()
+    sqlite.exec(failure === 'later insert' ? 'DROP TRIGGER reject_starter' : 'DROP TRIGGER reject_claim')
+    expect(await (await choose('B1', cookie)).json())
+      .toEqual({ english_level: 'B1', starter_cards_created: 100, already_selected: false })
+  })
 
   it.each(['A1', 'A2', 'B1', 'B2'])('persists %s and materializes only that CEFR-J level', async level => {
     seedCatalog(sqlite)

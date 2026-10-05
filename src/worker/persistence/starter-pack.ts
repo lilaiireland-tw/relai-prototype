@@ -1,7 +1,10 @@
-import type { PersistenceDatabase } from './d1'
+import type { PersistenceDatabase, PersistenceStatement } from './d1'
 import type { EnglishLevel } from './types'
 
 export const STARTER_BATCH_SIZE = 100
+// Each card uses two bindings; each INSERT also binds five shared values.
+// 47 cards use 99 parameters, below D1's 100-parameter query limit.
+const STARTER_INSERT_SIZE = 47
 const SOURCE_DATASET = 'CEFR-J Vocabulary Profile'
 const SOURCE_VERSION = '1.6'
 export const ENGLISH_LEVELS = ['A1', 'A2', 'B1', 'B2'] as const
@@ -43,14 +46,16 @@ export async function bootstrapStarterPack(
   if (candidates.results.length === 0) return { kind: 'catalog_unavailable' }
 
   const ids = candidates.results.map(({ id }) => [id, crypto.randomUUID()] as const)
-  const values = ids.map(() => '(?, ?)').join(', ')
-  const statements = [
-    db.prepare(`INSERT INTO user_settings (user_id, timezone, english_level, created_at, updated_at)
-      VALUES (?, 'UTC', ?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET english_level = excluded.english_level,
-        updated_at = excluded.updated_at WHERE user_settings.english_level IS NULL`)
-      .bind(userId, level, at, at),
-    db.prepare(`WITH chosen(catalog_id, card_id) AS (VALUES ${values})
+  const statements: PersistenceStatement[] = []
+  const insertIndexes: number[] = []
+  // D1 serializes the entire batch transaction. Keep the level unclaimed until
+  // all chunks are inserted, so every chunk can use the same persistent guard.
+  // A concurrent losing batch sees the committed level and inserts nothing.
+  for (let offset = 0; offset < ids.length; offset += STARTER_INSERT_SIZE) {
+    const chunk = ids.slice(offset, offset + STARTER_INSERT_SIZE)
+    const values = chunk.map(() => '(?, ?)').join(', ')
+    insertIndexes.push(statements.length)
+    statements.push(db.prepare(`WITH chosen(catalog_id, card_id) AS (VALUES ${values})
       INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
         part_of_speech, zh_tw_definition, explanation, irish_usage, source,
         vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
@@ -63,17 +68,26 @@ export async function bootstrapStarterPack(
         catalog.source_dataset || ' ' || catalog.source_version,
         catalog.id, catalog.normalized_key, ?, ?
       FROM chosen JOIN vocabulary_catalog AS catalog ON catalog.id = chosen.catalog_id
-      WHERE changes() = 1 AND NOT EXISTS (
+      WHERE NOT EXISTS (
+        SELECT 1 FROM user_settings WHERE user_id = ? AND english_level IS NOT NULL
+      ) AND NOT EXISTS (
         SELECT 1 FROM flashcards AS owned WHERE owned.user_id = ?
           AND owned.card_type = 'vocabulary' AND owned.vocabulary_key = catalog.normalized_key
       ) ON CONFLICT DO NOTHING`)
-      .bind(...ids.flat(), userId, at, at, userId),
-    db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)
+      .bind(...chunk.flat(), userId, at, at, userId, userId))
+    // Read changes() immediately after EACH card INSERT, including empty chunks.
+    statements.push(db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)
       SELECT ?, changes(), ? WHERE changes() > 0
       ON CONFLICT(user_id) DO UPDATE SET
         total_cards_created = user_stats.total_cards_created + excluded.total_cards_created,
-        updated_at = excluded.updated_at`).bind(userId, at),
-  ]
+        updated_at = excluded.updated_at`).bind(userId, at))
+  }
+  const claimIndex = statements.length
+  statements.push(db.prepare(`INSERT INTO user_settings (user_id, timezone, english_level, created_at, updated_at)
+    VALUES (?, 'UTC', ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET english_level = excluded.english_level,
+      updated_at = excluded.updated_at WHERE user_settings.english_level IS NULL`)
+    .bind(userId, level, at, at))
   const results = await db.batch(statements)
   if (results.length !== statements.length || results.some(result => !result.success)) {
     throw new Error('Starter bootstrap batch failed.')
@@ -84,7 +98,8 @@ export async function bootstrapStarterPack(
   if (chosenLevel.english_level !== level) {
     return { kind: 'different_level', english_level: chosenLevel.english_level }
   }
-  return results[0].meta.changes === 1
-    ? { kind: 'created', english_level: level, starter_cards_created: results[1].meta.changes }
+  return results[claimIndex].meta.changes === 1
+    ? { kind: 'created', english_level: level,
+      starter_cards_created: insertIndexes.reduce((count, index) => count + results[index].meta.changes, 0) }
     : { kind: 'repeat', english_level: level, starter_cards_created: 0 }
 }
