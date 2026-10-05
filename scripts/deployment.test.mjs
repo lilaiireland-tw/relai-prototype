@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { URL } from 'node:url'
+import { unstable_readConfig as readConfig } from 'wrangler'
 import { verifyStagingBuild, verifyStagingDeployEnvironment } from './verify-staging-build.mjs'
 import { stagingUrls, verifyStagingHealth } from './verify-staging-health.mjs'
 
@@ -11,9 +12,40 @@ const staging = {
   name: 'relai-prototype-staging',
   workers_dev: true,
   routes: [],
+  observability: { enabled: true, logs: { enabled: true, invocation_logs: true } },
   d1_databases: [{ binding: 'DB', database_name: 'relai-staging-db', database_id: 'staging-id' }],
 }
 const origin = 'https://relai-prototype-staging.example.workers.dev'
+
+test('source Wrangler config enables observability only for staging', () => {
+  const config = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
+  assert.equal(config.observability?.enabled, true)
+  assert.equal(config.observability?.logs?.enabled, true)
+  assert.equal(config.observability?.logs?.invocation_logs, true)
+  for (const env of ['', 'production']) {
+    const other = readConfig({ config: 'wrangler.jsonc', env })
+    assert.notEqual(other.observability?.enabled, true)
+    assert.notEqual(other.observability?.logs?.enabled, true)
+  }
+})
+
+test('staging build guard rejects missing or disabled observability in source and generated config', () => {
+  verifyStagingBuild(staging, staging)
+  for (const observability of [
+    undefined,
+    { ...staging.observability, enabled: false },
+    { logs: staging.observability.logs },
+    { enabled: true },
+    { enabled: true, logs: { invocation_logs: true } },
+    { enabled: true, logs: { enabled: false, invocation_logs: true } },
+    { enabled: true, logs: { enabled: true } },
+    { enabled: true, logs: { enabled: true, invocation_logs: false } },
+  ]) {
+    const invalid = { ...staging, observability }
+    assert.throws(() => verifyStagingBuild(invalid, staging), /Built staging.*must be enabled/)
+    assert.throws(() => verifyStagingBuild(staging, invalid), /Source staging.*must be enabled/)
+  }
+})
 
 test('staging deployment guard rejects a production build, swapped DB, extra binding and custom routes', () => {
   verifyStagingBuild(staging, staging)

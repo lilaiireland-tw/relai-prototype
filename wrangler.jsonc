@@ -22,6 +22,13 @@
       "name": "relai-prototype-staging",
       "workers_dev": true,
       "routes": [],
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "enabled": true,
+          "invocation_logs": true
+        }
+      },
       "d1_databases": [
         {
           "binding": "DB",

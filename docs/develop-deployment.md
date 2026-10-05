@@ -26,11 +26,22 @@ The repository supplies two commands for Cloudflare:
 
 Both use the locked local Wrangler. The config check rejects a production Worker,
 wrong/extra D1 bindings, disabled workers.dev, custom routes and an inherited
-`CLOUDFLARE_ENV`. The health check
+`CLOUDFLARE_ENV`. It also requires enabled observability, logs and invocation logs
+in both the source staging environment and the generated config. The health check
 requires HTTPS on the stable staging workers.dev origin, HTTP 200, JSON content
 type and exactly `{"status":"ok"}` at `/relaiapp/api/v1/health`. It rejects redirects
 and retries up to six times with ten-second timeouts and five-second delays.
 Health checks runtime availability, not schema, auth, Gemini or product acceptance.
+
+Persistent [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
+are enabled by `env.staging.observability` in `wrangler.jsonc`, including
+`logs.enabled` and `logs.invocation_logs`. The existing Vite build carries these
+settings into the flattened staging config; they take effect through the same
+Workers Builds deployment after merge to `develop`. Inspect the staging Worker's
+Logs in the Cloudflare Dashboard after deployment. Production observability is
+unchanged. This configuration adds no application logging, Logpush or external
+logging vendor. Never log passwords, session cookies/tokens, `AUTH_PEPPER`, secrets
+or sensitive user learning content.
 
 ## Product Owner Dashboard settings
 
