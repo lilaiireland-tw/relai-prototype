@@ -6,6 +6,11 @@ import { pathToFileURL } from 'node:url'
 import { unstable_readConfig as readConfig } from 'wrangler'
 
 export function verifyStagingBuild(config, staging) {
+  for (const [label, candidate] of [['Source staging', staging], ['Built staging', config]]) {
+    assert.equal(candidate.observability?.enabled, true, `${label} observability must be enabled`)
+    assert.equal(candidate.observability?.logs?.enabled, true, `${label} logs must be enabled`)
+    assert.equal(candidate.observability?.logs?.invocation_logs, true, `${label} invocation logs must be enabled`)
+  }
   assert.equal(config.name, 'relai-prototype-staging', 'Deploy only the staging Worker')
   assert.equal(config.name, staging.name)
   assert.equal(config.workers_dev, true, 'Staging must enable its stable workers.dev URL')
@@ -29,5 +34,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const staging = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
   const built = JSON.parse(await readFile('dist/relai_prototype/wrangler.json', 'utf8'))
   verifyStagingBuild(built, staging)
-  log('Verified staging build: relai-prototype-staging -> DB -> relai-staging-db; workers.dev only.')
+  log('Verified staging build: relai-prototype-staging -> DB -> relai-staging-db; workers.dev only; observability/logs/invocation logs enabled.')
 }
