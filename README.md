@@ -23,7 +23,7 @@ Worker 使用不透明、有效期七天的工作階段 cookie，設定 `HttpOnl
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` 與 `0003_add_cefr_j_vocabulary_foundation.sql`。套用 migration 必須由操作人員明確執行，與 CI、部署分開。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)與 [migration 流程](docs/d1-migrations.md)。
+`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` 與 `0003_add_cefr_j_vocabulary_foundation.sql`。遠端 migration 必須由操作人員明確執行，與 CI、部署分開；Playwright 僅自動套用隔離本機 D1 的 migration。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)與 [migration 流程](docs/d1-migrations.md)。
 
 ## 儲存庫結構
 
@@ -65,9 +65,15 @@ npm run user:manage -- create --interactive --env staging
 
 一般本機驗證不應操作真實帳號或遠端資料庫。
 
+## Playwright 瀏覽器 E2E
+
+Vitest／Node 測試保留單元、元件、API、持久化及部署設定檢查；Playwright 以 Chromium 驗證真實 React → HTTP → 本機 Worker/Hono → 隔離的本機 D1。最後的 Cloudflare／staging 驗收仍由人工執行。
+
+首次執行 `npx playwright install chromium`，再執行 `npm run test:e2e`。此指令自動重設測試資料、啟動本機應用程式、執行測試並關閉伺服器，不需要第二個終端機或 staging 密鑰。測試位於 `e2e/`；headed、UI、debug、報告、trace、選擇器慣例與新增測試範例見 [Playwright 工作流程](docs/playwright.md)。一般 PR 測試不得寫入 staging／production D1。
+
 ## 交付與部署
 
-GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 Cloudflare Workers Builds 負責從 `develop` 自動部署，使用 `npm run build:staging:validated` 與 `npm run deploy:staging:built`；後者部署經驗證的 staging 建置並檢查健康狀態。儲存庫本身無法證明 Cloudflare Dashboard 的 Git 連線目前是否啟用，應在 Builds 與 Deployments 頁面查核。Production 仍由 `main` 採受保護的手動發布流程。D1 migration 需另外審查並由操作人員執行，不會由 CI 或 staging 部署指令自動套用。設定與安全規則見 [develop 部署手冊](docs/develop-deployment.md)。
+GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 Cloudflare Workers Builds 負責從 `develop` 自動部署，使用 `npm run build:staging:validated` 與 `npm run deploy:staging:built`；後者部署經驗證的 staging 建置並檢查健康狀態。儲存庫本身無法證明 Cloudflare Dashboard 的 Git 連線目前是否啟用，應在 Builds 與 Deployments 頁面查核。Production 仍由 `main` 採受保護的手動發布流程。遠端 D1 migration 需另外審查並由操作人員執行，不會由 CI 或 staging 部署指令自動套用。設定與安全規則見 [develop 部署手冊](docs/develop-deployment.md)。
 
 ## 開發進度
 

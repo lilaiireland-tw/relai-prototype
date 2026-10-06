@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "relai-e2e-local-only",
+  "main": "../src/worker/index.ts",
+  "compatibility_date": "2026-09-27",
+  "workers_dev": false,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/relaiapp/api", "/relaiapp/api/*"]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "relai-e2e-local-only",
+    "database_id": "00000000-0000-0000-0000-000000000082",
+    "migrations_dir": "../migrations",
+    "remote": false
+  }]
+}

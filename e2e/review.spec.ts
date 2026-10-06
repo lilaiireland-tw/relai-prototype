@@ -1,0 +1,23 @@
+import { test, expect, openCards } from './fixtures'
+
+test('only explicit completion records one review and updates visible progress', async ({ page, login }) => {
+  await page.goto('login')
+  await login()
+  await expect(page.getByText('已完成 0 次複習', { exact: true })).toBeVisible()
+  await openCards(page)
+  await expect(page.getByRole('button', { name: '完成複習', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '翻面' }).click()
+  await page.getByRole('link', { name: '返回首頁' }).click()
+  await expect(page.getByText('已完成 0 次複習', { exact: true })).toBeVisible()
+  await openCards(page)
+  await page.getByRole('button', { name: '翻面' }).click()
+  const completed = page.waitForResponse(r => r.url().endsWith('/api/v1/reviews') && r.request().method() === 'POST')
+  await page.getByRole('button', { name: '完成複習', exact: true }).click()
+  expect((await completed).ok()).toBe(true)
+  await expect(page.getByRole('status').filter({ hasText: '複習已完成' })).toContainText('今日 1 / 10 次')
+  await expect(page.getByRole('button', { name: '已完成複習', exact: true })).toBeDisabled()
+  await page.getByRole('link', { name: '返回首頁' }).click()
+  await expect(page.getByText('已完成 1 次複習', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('已完成 1 次複習', { exact: true })).toBeVisible()
+})

@@ -9,7 +9,7 @@
     "build:staging:validated": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:staging-build",
     "build:production": "vite build --mode production",
     "preview": "npm run build && vite preview",
-    "lint": "eslint src scripts/*.mjs scripts/*.ts vite.config.ts vitest.config.ts eslint.config.js",
+    "lint": "eslint src scripts/*.mjs scripts/*.ts vite.config.ts vitest.config.ts eslint.config.js e2e/*.ts playwright.config.ts vite.e2e.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test scripts/deployment.test.mjs && npm run verify:d1-config",
     "test:routing": "npm run build && node --test scripts/routing.test.mjs",
@@ -31,7 +31,13 @@
     "deploy:production": "npm run build:production && wrangler deploy",
     "user:manage": "tsx scripts/manage-user.ts",
     "catalog:import": "tsx scripts/import-cefr-j.ts",
-    "test:admin": "vitest run scripts/manage-user.test.ts scripts/manage-user-platform.test.ts"
+    "test:admin": "vitest run scripts/manage-user.test.ts scripts/manage-user-platform.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:trace": "playwright show-trace"
   },
   "dependencies": {
     "hono": "^4.13.9",
@@ -44,12 +50,14 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.61.0",
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "eslint": "^9.0.0",
+    "fflate": "^0.8.3",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
