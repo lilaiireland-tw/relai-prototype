@@ -18,6 +18,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
  const [state, setState] = useState<AuthState>({ status: 'loading', user: null })
  const [notice, setNotice] = useState('')
  const generation = useRef(0)
+ const refreshGeneration = useRef(0)
  const navigate = useNavigate()
  const retry = useCallback(async () => {
   const current = ++generation.current
@@ -27,6 +28,21 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
    if (current === generation.current) setState({ status: 'authenticated', user })
   } catch (error) {
    if (current === generation.current) setState({ status: error instanceof ApiError && error.status === 401 ? 'unauthenticated' : 'error', user: null })
+  }
+ }, [])
+ const refresh = useCallback(async () => {
+  // Background checks must not invalidate an in-flight auth mutation.
+  const current = generation.current
+  const request = ++refreshGeneration.current
+  try {
+   const { user } = await apiClient.me()
+   if (current === generation.current && request === refreshGeneration.current) setState({ status: 'authenticated', user })
+  } catch (error) {
+   if (current === generation.current && request === refreshGeneration.current && error instanceof ApiError && error.status === 401) {
+    ++generation.current
+    setState({ status: 'unauthenticated', user: null })
+   }
+   // Transient failures retain the authenticated UI; protected APIs still enforce 401s.
   }
  }, [])
  useEffect(() => {
@@ -40,10 +56,10 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
  // Recheck session and password requirements when returning to the app.
  useEffect(() => {
   if (state.status !== 'authenticated') return
-  const check = () => { void retry() }
+  const check = () => { void refresh() }
   window.addEventListener('focus', check)
   return () => window.removeEventListener('focus', check)
- }, [state.status, retry])
+ }, [state.status, refresh])
  return <AuthSession.Provider value={{ state, notice, retry,
   async login(username, password) {
    const current = ++generation.current
@@ -60,9 +76,11 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
    }
   },
   async changePassword(currentPassword, newPassword) {
-   const current = generation.current
+   let current = ++generation.current
    await apiClient.changePassword({ current_password: currentPassword, new_password: newPassword })
    if (current !== generation.current) return
+   // Discard background checks started before the password mutation completed.
+   current = ++generation.current
    setState({ status: 'loading', user: null })
    let user: AuthUser
    try { ({ user } = await apiClient.me()) }

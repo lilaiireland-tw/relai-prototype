@@ -143,17 +143,22 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain('不一致')
     expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/auth/change-password'))).toHaveLength(0)
   })
-  it('does not mount protected content or load product data during bootstrap', async () => {
+  it.each([200, 401])('blocks protected content and product data until bootstrap resolves with %s', async status => {
     let resolveMe!: (response: Response) => void
+    const original = vi.mocked(fetch).getMockImplementation()!
     vi.mocked(fetch).mockImplementation(() => new Promise(resolve => { resolveMe = resolve }))
     const product = vi.spyOn(clientData, 'getHome')
     await renderAt('/relaiapp/home')
     expect(container.textContent).toContain('正在確認登入狀態')
     expect(container.textContent).not.toContain('今日進度')
     expect(product).not.toHaveBeenCalled()
-    await act(() => resolveMe(new Response(null, { status: 401 })))
-    expect(window.location.pathname).toBe('/relaiapp/login')
-    expect(product).not.toHaveBeenCalled()
+    vi.mocked(fetch).mockImplementation(original)
+    await act(() => resolveMe(status === 200 ? authResponse() : new Response(null, { status: 401 })))
+    expect(window.location.pathname).toBe(status === 200 ? '/relaiapp/home' : '/relaiapp/login')
+    if (status === 200) {
+      expect(product).toHaveBeenCalledTimes(1)
+      expect(container.textContent).toContain('今日進度')
+    } else expect(product).not.toHaveBeenCalled()
   })
   it.each([
     () => Promise.reject(new Error('private network detail')),
@@ -186,6 +191,55 @@ describe('migrated client under /relaiapp', () => {
     await act(() => window.dispatchEvent(new Event('focus')))
     expect(window.location.pathname).toBe('/relaiapp/login')
     expect(container.textContent).not.toContain('今日進度')
+  })
+  it('updates safe user data on successful background focus revalidation', async () => {
+    await renderAt('/relaiapp/home')
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ user: { ...user, display_name: 'Updated Alex' } }))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    expect(container.textContent).toContain('Updated Alex')
+    expect(container.textContent).toContain('今日進度')
+  })
+  it.each(['logout', 'unauthorized'] as const)('discards background success after %s clears the session', async action => {
+    await renderAt('/relaiapp/home')
+    let resolveMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { resolveMe = resolve }))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    if (action === 'logout') await click(button('登出'))
+    else {
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 401 }))
+      const { apiClient } = await import('./lib/api')
+      await act(async () => { await expect(apiClient.getHealth()).rejects.toMatchObject({ status: 401 }) })
+    }
+    await act(() => resolveMe(authResponse()))
+    expect(window.location.pathname).toBe('/relaiapp/login')
+    expect(container.textContent).not.toContain('今日進度')
+  })
+  it('discards an older background 401 after a newer focus check succeeds', async () => {
+    await renderAt('/relaiapp/home')
+    let resolveOldMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { resolveOldMe = resolve }))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    await act(() => resolveOldMe(new Response(null, { status: 401 })))
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    expect(container.textContent).toContain('今日進度')
+  })
+  it('completes password change despite focus and discards the stale background user', async () => {
+    await renderAt('/relaiapp/change-password')
+    await input('current_password', 'current')
+    await input('new_password', 'new-password')
+    await input('confirm_password', 'new-password')
+    let resolveChange!: (response: Response) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { resolveChange = resolve }))
+    await act(() => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    let resolveMe!: (response: Response) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { resolveMe = resolve }))
+    await act(() => window.dispatchEvent(new Event('focus')))
+    await act(() => resolveChange(authResponse()))
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    await act(() => resolveMe(Response.json({ user: { ...user, must_change_password: true } })))
+    expect(window.location.pathname).toBe('/relaiapp/home')
+    expect(container.textContent).toContain('今日進度')
   })
   it('clears auth when centralized transport receives a session 401', async () => {
     await renderAt('/relaiapp/home')

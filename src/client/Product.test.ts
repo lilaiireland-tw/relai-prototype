@@ -46,6 +46,74 @@ describe('Phase 4 authenticated product UI', () => {
  }
  const requests = (suffix: string, method?: string) => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).split('?')[0].endsWith(suffix) && (!method || init?.method === method))
 
+ it.each(['success', 'network', '503'] as const)('preserves mounted card position, filter and flip during %s focus revalidation', async outcome => {
+  const storageSpy = vi.spyOn(Storage.prototype, 'setItem')
+  await renderAt('cards')
+  await change('select[aria-label="篩選卡片"]', 'all')
+  await click(button('下一張')); await click(button('翻面'))
+  const card = container.querySelector('.flip-card-inner')
+  const filter = container.querySelector<HTMLSelectElement>('select[aria-label="篩選卡片"]')!
+  const content = container.textContent
+  const settingsReads = requests('/settings').length
+  const cardsReads = requests('/cards').length
+  const authReads = requests('/auth/me').length
+  let resolveMe!: (response: Response) => void
+  let rejectMe!: (error: Error) => void
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise((resolve, reject) => { resolveMe = resolve; rejectMe = reject }))
+  await act(() => window.dispatchEvent(new Event('blur')))
+  await act(() => window.dispatchEvent(new Event('focus')))
+  const expectPreserved = () => {
+   expect(window.location.pathname).toBe('/relaiapp/cards')
+   expect(container.textContent).toBe(content)
+   expect(container.textContent).toContain('2 / 7')
+   expect(container.querySelector('.flip-card-inner')).toBe(card)
+   expect(card?.classList.contains('flipped')).toBe(true)
+   expect(button('翻面').getAttribute('aria-pressed')).toBe('true')
+   expect(container.querySelector('select[aria-label="篩選卡片"]')).toBe(filter)
+   expect(filter.value).toBe('all')
+   expect(requests('/settings')).toHaveLength(settingsReads)
+   expect(requests('/cards')).toHaveLength(cardsReads)
+   expect(storageSpy).not.toHaveBeenCalled()
+  }
+  expect(requests('/auth/me')).toHaveLength(authReads + 1)
+  expectPreserved()
+  await act(() => {
+   if (outcome === 'network') rejectMe(new Error('private network detail'))
+   else resolveMe(outcome === '503' ? new Response('private server detail', { status: 503 }) : Response.json({
+    user: { id: 'owner', username: 'Alex', display_name: 'Updated Alex', role: 'user', must_change_password: false },
+   }))
+  })
+  expectPreserved()
+  if (outcome !== 'success') {
+   // A transient auth failure does not bypass later centralized product 401 handling.
+   vi.mocked(fetch).mockImplementationOnce(async () => new Response(null, { status: 401 }))
+   await click(button('收藏'))
+   expect(window.location.pathname).toBe('/relaiapp/login')
+   expect(container.querySelector('.flip-card-inner')).toBeNull()
+  } else {
+   await click(button('下一張'))
+   expect(container.textContent).toContain('3 / 7')
+  }
+ })
+ it('hides Cards and redirects to login when background focus revalidation returns 401', async () => {
+  await renderAt('cards'); await click(button('下一張'))
+  vi.mocked(fetch).mockImplementationOnce(async () => new Response(null, { status: 401 }))
+  await act(() => window.dispatchEvent(new Event('focus')))
+  expect(window.location.pathname).toBe('/relaiapp/login')
+  expect(container.querySelector('[data-source="api"]')).toBeNull()
+  expect(container.querySelector('select[aria-label="篩選卡片"]')).toBeNull()
+  expect(requests('/auth/me')).toHaveLength(2)
+ })
+ it('still enforces password requirements returned by background focus revalidation', async () => {
+  await renderAt('cards')
+  mustChange = true
+  await act(() => window.dispatchEvent(new Event('focus')))
+  expect(window.location.pathname).toBe('/relaiapp/change-password')
+  expect(container.querySelector('[data-source="api"]')).toBeNull()
+  expect(requests('/settings')).toHaveLength(1)
+  expect(requests('/cards')).toHaveLength(1)
+ })
+
  it.each(['home', 'cards', 'error-log', 'stats', 'settings'])('gates no-level %s before loading product screens', async path => {
   server.home.settings.english_level = null
   await renderAt(path)
