@@ -13,6 +13,9 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+**/.dev.vars*
 
 # Locally generated output from removed legacy frontend checkouts
 **/.next/
