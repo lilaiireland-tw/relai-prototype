@@ -234,6 +234,27 @@ describe('offline admin account management', () => {
     expect(rows[0].is_active).toBe(0)
   })
 
+  it('rejects an account list above the bounded result cap without returning partial data', async () => {
+    const at = '2026-11-02T00:00:00.000Z'
+    const prepare = db.prepare
+    let listSql = ''
+    db.prepare = (sql) => {
+      if (sql.includes('FROM users ORDER BY username')) listSql = sql
+      return prepare(sql)
+    }
+    const insert = sqlite.prepare(`INSERT INTO users
+      (id, username, display_name, password_salt, password_digest, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    for (let index = 0; index <= 1000; index++) {
+      insert.run(`list-${index}`, `list-${index}`, 'Learner', 'salt', 'digest', at, at)
+    }
+
+    expect(await run(['list'])).toBe(1)
+    expect(listSql).toMatch(/LIMIT 1001\s*$/)
+    expect(output).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledWith('Account list exceeds the 1000-account safety limit; no results were returned.')
+  })
+
   it.each(['reset-password', 'disable'])('uses exact lookup and fails safely for missing users: %s', async (command) => {
     await run(create); output.mockClear()
     expect(await run([command, '--username', 'alex'])).toBe(1)

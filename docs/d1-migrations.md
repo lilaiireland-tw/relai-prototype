@@ -4,7 +4,9 @@ Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
 use `migrations_dir: "migrations"`. The committed history contains migrations
 `0001` through `0005_canonical_sense_aware_vocabulary.sql`.
-Check remote migration history before code that depends on a migration is deployed.
+Check migration history before code that depends on a migration is deployed. Any
+remote check or migration requires Product Owner authorization for that operation
+and both explicit safety opt-ins described below.
 
 `0004_normalize_vocabulary_ownership.sql` resets prototype flashcards, reviews,
 stats and selected levels rather than backfilling disposable learning data. It
@@ -38,14 +40,14 @@ This is an operator runbook only. It was not executed as part of Issue #91; no
 remote D1 write is authorized by the PR.
 
 1. Select the reviewed commit intended for staging. Verify the authenticated
-   Cloudflare account and confirm `relai-staging-db` and its exact database ID
-   using [D1 environments](d1-environments.md). Confirm remotely that 0001–0004
-   are applied and 0005 alone is pending:
+   Cloudflare account and confirm the configured `relai-staging-db` target using
+   the bounded schema verifier and migration list. Both remote commands require
+   separate Product Owner authorization and the two safety opt-ins:
 
    ```sh
    npm run verify:d1-config
-   npx wrangler d1 info relai-staging-db --config wrangler.jsonc --env staging --json
-   npm run db:migrations:list:staging
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run verify:d1-schema:staging -- --approve-remote-cloudflare
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:staging -- --approve-remote-cloudflare
    ```
 
 2. Take a recoverable, access-controlled D1 backup/export using the approved
@@ -62,20 +64,22 @@ remote D1 write is authorized by the PR.
    backup before the explicit write:
 
    ```sh
-   npm run db:migrations:apply:staging
-   npm run db:migrations:list:staging
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:apply:staging -- --approve-remote-cloudflare
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:staging -- --approve-remote-cloudflare
    ```
 
 4. Deploy the matching reviewed Worker build immediately after migration, then
-   run `npm run verify:d1-schema:staging` and authorized staging smoke checks.
+   run the schema verifier and authorized staging smoke checks. Each remote
+   action requires its own Product Owner authorization and both opt-ins.
    Verify 0005 is recorded exactly once, all vocabulary cards resolve to catalog
    entries, and favorites, review history, stats, settings and source/onboarding
    records retain their pre-migration values. Record the commit, backup reference,
    migration and verification evidence. If migration or verification fails, stop;
    do not delete rows or repair the schema with ad hoc Dashboard SQL.
 
-Run all commands from the repository root with the installed Wrangler. Each
-command selects the database name, source config and environment explicitly.
+Run all commands from the repository root. Gated remote scripts invoke the
+installed Wrangler with the database name, source config and environment fixed
+explicitly.
 Do not use generated `dist` configuration: a previous Vite build must not select
 the migration target. Migration history is append-only: never edit, rename,
 reorder or delete committed/applied SQL; fix it with a new migration. Wrangler
@@ -120,19 +124,20 @@ stay in protected Wrangler login/token configuration, never committed or logged.
 
 ```sh
 npm run verify:d1-config
-npx wrangler d1 info relai-staging-db --config wrangler.jsonc --env staging --json
-npm run db:migrations:list:staging
-# Review pending SQL and target relai-staging-db before explicitly running:
-npm run db:migrations:apply:staging
-npm run db:migrations:list:staging
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:staging -- --approve-remote-cloudflare
+# After separate Product Owner approval and SQL review:
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:apply:staging -- --approve-remote-cloudflare
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:staging -- --approve-remote-cloudflare
 ```
 
-The staging scripts expand to:
+Every remote operation requires both opt-ins on that command and specific
+Product Owner authorization. Without both opt-ins, the script stops before
+starting Wrangler. The list operation only reads migration history; Cloudflare
+may bill differently from result counts. Apply is a remote write. Do not set the
+approval variable in routine development or CI.
 
-```sh
-npx wrangler d1 migrations list relai-staging-db --config wrangler.jsonc --env staging --remote
-npx wrangler d1 migrations apply relai-staging-db --config wrangler.jsonc --env staging --remote
-```
+The staging scripts use fixed Wrangler arguments for the staging database and
+stop before starting Wrangler unless both opt-ins are present.
 
 Staging migration is an operator action separate from deployment. Never add it
 to GitHub Actions, Cloudflare Workers Builds, or ordinary develop build/deploy
@@ -143,9 +148,10 @@ for environment safety.
 
 ## Production: explicit manual release only
 
-These commands are a manual release runbook. There is
-no production migration package script or CI/CD hook. Deployment alone never
-applies migrations.
+These commands are a manual release runbook. There is no production migration
+CI/CD hook. Deployment alone never applies migrations. The package scripts below
+are operator commands protected by the same two-part approval gate as staging
+operations.
 
 1. Obtain Product Owner authorization for the production release. Check out the
    approved `main` release commit; confirm its SQL passed local/staging checks.
@@ -155,15 +161,15 @@ applies migrations.
 
    ```sh
    npm run verify:d1-config
-   npx wrangler d1 info relai-prod-db --config wrangler.jsonc --env production --json
-   npx wrangler d1 migrations list relai-prod-db --config wrangler.jsonc --env production --remote
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:info:production -- --approve-remote-cloudflare
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:production -- --approve-remote-cloudflare
    ```
 
 3. After release approval and target review, manually run:
 
    ```sh
-   npx wrangler d1 migrations apply relai-prod-db --config wrangler.jsonc --env production --remote
-   npx wrangler d1 migrations list relai-prod-db --config wrangler.jsonc --env production --remote
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:apply:production -- --approve-remote-cloudflare
+   RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run db:migrations:list:production -- --approve-remote-cloudflare
    ```
 
 4. Record release commit, applied filenames and outcome. Check the schema before
@@ -246,13 +252,14 @@ workflow above for a separately authorized release.
 
 The reviewed `0001_initial_core_schema.sql` was applied to `relai-staging-db`
 on 2026-09-28. See [exact commands and verification evidence](staging-d1-schema-25.md).
-Use the explicit read-only verifier after authenticating and selecting the
-documented ReLai account with `CLOUDFLARE_ACCOUNT_ID`:
+The bounded verifier is an explicit remote operator action: use it only with
+Product Owner authorization, `CLOUDFLARE_ACCOUNT_ID` set to the documented ReLai
+account, and both safety opt-ins:
 
 ```sh
-npm run verify:d1-schema:staging
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run verify:d1-schema:staging -- --approve-remote-cloudflare
 ```
 
-It checks remote identity, active staging Worker binding, exact PRD schema,
-required indexes/unique constraints, empty application tables and committed
-migration history. It never applies migrations and is not part of CI/CD.
+It checks remote identity, staging binding, schema metadata, required indexes and
+bounded migration history. It does not scan application rows or apply migrations,
+and it is not part of routine development or CI/CD.

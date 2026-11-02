@@ -23,11 +23,16 @@ Canonical AI vocabulary identity is normalized headword, part of speech and sema
 
 ## Staging import, after separate authorization
 
-The CLI defaults to **local D1**. An operator can explicitly target the configured staging database after reviewing the migration and source artifact:
+The CLI defaults to **local D1**. Remote import requires Product Owner
+authorization for that specific operation,
+plus both safety opt-ins. Run it as:
 
 ```sh
-npm run catalog:import -- --file data/cefr-j-local/cefr-j-1.6.json --remote --confirm-staging relai-staging-db
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run catalog:import -- --file data/cefr-j-local/cefr-j-1.6.json --remote --confirm-staging relai-staging-db --approve-remote-cloudflare
 ```
+
+Without both opt-ins, the importer stops before opening Wrangler or D1. Do not
+set the approval variable in routine development or CI.
 
 The command also applies the reviewed fixture by default; use `--enrichment <file>` only when the reviewed fixture path changes. It validates the staging binding's name and ID, including separation from production. For `--remote`, it creates a private temporary Wrangler config containing only staging `DB`, with that binding explicitly set to `remote: true`. Both the resolved binding and `remoteBindings: true` must be enabled: the latter alone does not select remote D1 ([Cloudflare remote bindings](https://developers.cloudflare.com/workers/local-development/#remote-bindings)). No preview database ID is copied. The normal `wrangler.jsonc` is unchanged, so ordinary local development and imports continue using persistent simulated D1.
 

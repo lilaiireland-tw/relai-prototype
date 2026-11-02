@@ -1,7 +1,8 @@
 import { pathToFileURL } from 'node:url'
 import { promptTerminal } from './manage-user-prompt'
+import { logRemoteRisk, remoteApprovalFlag, requireRemoteApproval } from './cloudflare-approval.mjs'
 import { createPasswordCredential } from '../src/worker/auth/crypto'
-import { createRepositories, type PersistenceDatabase } from '../src/worker/persistence'
+import { ADMIN_ACCOUNT_LIST_LIMIT, createRepositories, type PersistenceDatabase } from '../src/worker/persistence'
 
 type Command = 'create' | 'reset-password' | 'disable' | 'list'
 export interface Arguments {
@@ -87,7 +88,13 @@ export interface Dependencies {
 async function execute(args: Arguments, db: PersistenceDatabase, pepper: string,
   temporaryCredential?: Awaited<ReturnType<typeof createPasswordCredential>>): Promise<string> {
   const { users, sessions } = createRepositories(db)
-  if (args.command === 'list') return JSON.stringify(await users.listAccounts(), null, 2)
+  if (args.command === 'list') {
+    const accounts = await users.listAccounts()
+    if (accounts.length > ADMIN_ACCOUNT_LIST_LIMIT) {
+      throw new UsageError(`Account list exceeds the ${ADMIN_ACCOUNT_LIST_LIMIT}-account safety limit; no results were returned.`)
+    }
+    return JSON.stringify(accounts, null, 2)
+  }
   const username = args.username!
   const existing = await users.findByUsername(username)
   if (args.command === 'create') {
@@ -156,13 +163,25 @@ export async function runManageUser(argv: string[], dependencies: Dependencies):
 
 // Direct execution only; importing this module never imports Wrangler or connects.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = await runManageUser(process.argv.slice(2), {
-    openPlatform: async (environment) => {
-      const { openAdminPlatform } = await import('./manage-user-platform')
-      return openAdminPlatform(environment)
-    },
-    output: (text) => process.stdout.write(`${text}\n`),
-    error: (text) => process.stderr.write(`${text}\n`),
-    prompt: promptTerminal,
-  })
+  try {
+    const rawArgs = process.argv.slice(2)
+    const parsed = parseArguments(rawArgs.filter((arg) => arg !== remoteApprovalFlag))
+    if (!process.env.AUTH_PEPPER) throw new UsageError('AUTH_PEPPER is required in the process environment.')
+    const args = requireRemoteApproval(rawArgs)
+    logRemoteRisk(`user management: ${parsed.command}`, parsed.command === 'list'
+      ? `up to ${ADMIN_ACCOUNT_LIST_LIMIT + 1} account rows (one overflow detector); larger lists stop without output, billed reads may differ.`
+      : 'one account lookup plus operation-specific account/session rows; disable writes scale with the user’s active sessions.')
+    process.exitCode = await runManageUser(args, {
+      openPlatform: async (environment) => {
+        const { openAdminPlatform } = await import('./manage-user-platform')
+        return openAdminPlatform(environment)
+      },
+      output: (text) => process.stdout.write(`${text}\n`),
+      error: (text) => process.stderr.write(`${text}\n`),
+      prompt: promptTerminal,
+    })
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 1
+  }
 }

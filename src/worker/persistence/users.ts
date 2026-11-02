@@ -1,6 +1,7 @@
 import { insertRow, mutate, type PersistenceDatabase } from './d1'
 import type { AdminAccountRow, CreateUserInput, SqlBoolean, UpdateCredentialInput, UserRow } from './types'
 
+export const ADMIN_ACCOUNT_LIST_LIMIT = 1000
 const columns = `id, username, display_name, password_salt, password_digest, role,
   is_active, cohort_source, created_at, updated_at, last_login_at, must_change_password`
 
@@ -15,7 +16,7 @@ export function createUsersRepository(db: PersistenceDatabase) {
     async listAccounts(): Promise<AdminAccountRow[]> {
       const result = await db.prepare(`SELECT id, username, display_name, role,
         is_active, cohort_source, created_at, updated_at, last_login_at
-        FROM users ORDER BY username, id`).all<AdminAccountRow>()
+        FROM users ORDER BY username LIMIT ${ADMIN_ACCOUNT_LIST_LIMIT + 1}`).all<AdminAccountRow>()
       if (!result.success) throw new Error('Persistence account listing failed.')
       return result.results
     },

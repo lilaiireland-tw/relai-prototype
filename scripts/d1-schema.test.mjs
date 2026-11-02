@@ -56,14 +56,14 @@ test('core schema and password-change state match approved migrations on clean l
     }
   })), /username must be unique/)
   assert.throws(() => verifyCoreSchema(altered((sql, result) => {
-    if (sql === 'SELECT name FROM d1_migrations ORDER BY id') {
+    if (sql === 'SELECT name FROM d1_migrations ORDER BY id LIMIT 50') {
       result[0].results.push({ name: 'unexpected.sql' })
     }
   })), /History must match/)
   assert.match(run(['migrations', 'apply']), /No migrations to apply/)
   assert.match(run(['migrations', 'list']), /No migrations to apply/)
   assert.deepEqual(schema(), initialSchema, 'Second apply must leave schema unchanged')
-  assert.deepEqual(query('SELECT name FROM d1_migrations ORDER BY id'), history)
+  assert.deepEqual(query('SELECT name FROM d1_migrations ORDER BY id LIMIT 50'), history)
 })
 
 test('canonical catalog senses are shared while user-owned learning state stays separate', () => {

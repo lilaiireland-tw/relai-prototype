@@ -157,6 +157,18 @@ Never:
 - Use client-supplied `user_id` as the authorization source.
 - Perform remote database writes without the authorization required by the Issue.
 
+### P0 Remote Cloudflare Access Guard (Issue #95)
+
+Effective 2026-11-02, routine development, debugging, builds, tests and CI must not access Cloudflare staging or production resources. Do not run remote D1 queries or schema verification, live Worker/API checks, remote migrations, Wrangler tail/deploy commands, remote Queue/R2 operations, or remote imports/seeds. Read-only operations can still consume D1 row-read quota.
+
+- Use only isolated local D1, mocked services, simulated Queue/R2 and local browser services for routine work.
+- Before running an npm script, inspect its full command and transitive scripts for remote access. Do not infer safety from a read-only label.
+- `npm test`, `npm run test:d1-schema`, `npm run test:e2e`, builds and CI must block outbound Cloudflare/Google access and receive empty Cloudflare/Google credentials.
+- Remote operator commands fail closed and require both `--approve-remote-cloudflare` and `RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT`. These safeguards do not themselves authorize an operation: Codex must also have separate explicit Product Owner authorization for that specific remote action. Never set the opt-in during routine development.
+- The staging schema verifier is metadata-only, bounded, and operator-only. Do not add application-table counts, `PRAGMA foreign_key_check`, or unbounded result queries to it.
+- Historical Cloudflare Dashboard analytics may be reviewed only with separate authorization. Do not run live SQL to attribute a quota incident.
+- Do not apply migrations, deploy, access remote resources, or merge as part of Issue #95.
+
 ### Database Migrations
 
 - Use repository-root `migrations/` as the schema source of truth.
@@ -273,7 +285,7 @@ npm run build
 Additionally:
 
 - Run Playwright E2E when the change affects browser workflows or when required by the Issue.
-- Run relevant D1/schema verification for database changes.
+- Run relevant D1/schema verification against isolated local D1 only. Remote schema verification requires separate explicit Product Owner authorization and is not a PR check.
 - Run security-focused tests for authentication, authorization, or sensitive data handling.
 - Run deployment-specific checks when configuration or routing changes.
 

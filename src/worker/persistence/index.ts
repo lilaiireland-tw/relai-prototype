@@ -15,6 +15,7 @@ export function createRepositories(db: PersistenceDatabase) {
 }
 
 export { tokenDigest } from './types'
+export { ADMIN_ACCOUNT_LIST_LIMIT } from './users'
 export type { CreateSessionInput, CreateUserInput, UpdateCredentialInput, SessionRow, UserRow, TokenDigest } from './types'
 export type { MutationResult, PersistenceDatabase } from './d1'
 export type { CardType, EditableFlashcard, FlashcardRow, CreateReviewEventInput,

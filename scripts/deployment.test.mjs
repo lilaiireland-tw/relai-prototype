@@ -74,8 +74,9 @@ test('staging deploy rejects an inherited Cloudflare environment before Wrangler
 test('staging deploy commands run the environment guard before Wrangler', () => {
   const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   for (const name of ['deploy', 'deploy:staging:built']) {
-    assert.match(scripts[name], /npm run verify:staging-build && wrangler deploy/)
+    assert.match(scripts[name], /deploy-staging\.mjs/)
   }
+  assert.match(readFileSync(new URL('./deploy-staging.mjs', import.meta.url), 'utf8'), /requireRemoteApproval/)
 })
 
 test('health URL guard accepts only the stable staging workers.dev origin', () => {
