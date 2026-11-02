@@ -22,6 +22,11 @@ const build = spawnSync(process.execPath, ['--import', guard, 'node_modules/vite
 })
 if (build.error) throw build.error
 if (build.status !== 0) process.exit(build.status ?? 1)
+const prepare = spawnSync(process.execPath, ['--import', guard, 'scripts/prepare-deploy-config.mjs', 'production'], {
+  cwd: root, stdio: 'inherit', env: process.env,
+})
+if (prepare.error) throw prepare.error
+if (prepare.status !== 0) process.exit(prepare.status ?? 1)
 const deploy = spawnSync(process.execPath, ['scripts/run-remote-wrangler.mjs', remoteApprovalFlag, 'production-deploy'], {
   cwd: root, stdio: 'inherit', env: process.env,
 })

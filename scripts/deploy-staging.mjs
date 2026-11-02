@@ -27,6 +27,7 @@ const run = (args, env = process.env) => {
 if (approvedArgs.includes('--build')) {
   run(['--import', guard, 'node_modules/vite/bin/vite.js', 'build', '--mode', 'staging'])
 }
+run(['--import', guard, 'scripts/prepare-deploy-config.mjs', 'staging'])
 run(['--import', guard, 'scripts/verify-staging-build.mjs'])
 run(['scripts/run-remote-wrangler.mjs', remoteApprovalFlag, 'staging-deploy-dry-run'])
 run(['scripts/run-remote-wrangler.mjs', remoteApprovalFlag, 'staging-deploy'])
