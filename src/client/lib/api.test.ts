@@ -105,6 +105,32 @@ describe('same-origin client API', () => {
     await expect(createApiClient(transport).getHealth()).rejects.toMatchObject({ kind: 'invalid-response' })
   })
 
+  it('accepts individual ambiguous results and returns saved cards', async () => {
+    const card = { id: '00000000-0000-4000-8000-000000000001', user_id: 'u1', source_item_id: null,
+      card_type: 'vocabulary', front_content: 'bank', back_content: '河岸', part_of_speech: 'noun',
+      zh_tw_definition: '河岸', english_example: 'They walked along the bank.', zh_tw_example_translation: '他們沿著河岸走。',
+      explanation: null, irish_usage: null, source: 'gemini-ai 1', is_favorite: false,
+      last_reviewed_at: null, next_review_at: null, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
+    const ambiguous = { headword: 'bank', status: 'ambiguous', reason: 'ambiguous_sense',
+      item: { headword: 'bank', part_of_speech: 'noun', semantic_sense: 'land beside water',
+        source_context: 'by the river', confidence: 0.99 },
+      options: [{ catalog_id: '00000000-0000-4000-8000-000000000002', semantic_sense: 'land beside a river' }] }
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ results: [ambiguous,
+      { headword: 'curious', status: 'saved', card_id: card.id }], cards: [card] }))
+    const client = createApiClient(transport)
+    const items = [{ headword: 'bank', part_of_speech: 'noun', semantic_sense: 'river edge', source_context: 'by the river' }]
+    await expect(client.saveVocabulary('00000000-0000-4000-8000-000000000001', items)).resolves.toMatchObject({
+      results: [{ status: 'ambiguous', options: [{ semantic_sense: 'land beside a river' }] },
+        { status: 'saved', card_id: card.id }], cards: [{ id: card.id }],
+    })
+    expect(transport).toHaveBeenCalledWith('/relaiapp/api/v1/vocabulary/save', expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }))
+    transport.mockResolvedValue(Response.json({ results: [{ headword: 'bank', status: 'ambiguous' }], cards: [] }))
+    await expect(client.saveVocabulary('00000000-0000-4000-8000-000000000001', items))
+      .rejects.toMatchObject({ kind: 'invalid-response' })
+  })
+
   it.each(['<html>SPA fallback</html>', '{broken'])('rejects non-JSON successful responses', async body => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(body))
     await expect(createApiClient(transport).getHealth()).rejects.toMatchObject({ kind: 'invalid-response' })

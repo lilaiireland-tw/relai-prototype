@@ -2,9 +2,8 @@
 
 Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
-use `migrations_dir: "migrations"`. The committed history contains
-`0001_initial_core_schema.sql`, `0002_add_users_must_change_password.sql`,
-and `0003_add_cefr_j_vocabulary_foundation.sql`, `0004_normalize_vocabulary_ownership.sql`.
+use `migrations_dir: "migrations"`. The committed history contains migrations
+`0001` through `0005_canonical_sense_aware_vocabulary.sql`.
 Check remote migration history before code that depends on a migration is deployed.
 
 `0004_normalize_vocabulary_ownership.sql` resets prototype flashcards, reviews,
@@ -13,6 +12,67 @@ must only be applied remotely through a separately approved staging operation.
 Because the old and new Worker schemas are incompatible, coordinate the migration
 with deployment of the Worker that expects the new schema; do not leave the old
 Worker running against the migrated database.
+
+## B5.4 canonical vocabulary migration (0005)
+
+`0005_canonical_sense_aware_vocabulary.sql` is append-only and is designed for
+a database that has already applied 0001–0004. Do not rerun or edit 0004: its
+historical prototype reset is not part of this migration. 0005 preserves users,
+sessions, source/onboarding records, settings, stats, favorites, flashcards,
+review events, the original CEFR-J rows and legacy personal vocabulary. It
+archives the old CEFR-J rows in `vocabulary_catalog_sources`, adds a
+canonical-to-source mapping, and rebuilds flashcards with only a canonical
+catalog reference plus user learning state. Legacy personal cards map to private
+`review_needed` catalog records so their content is retained without claiming a
+verified shared sense.
+
+The existing Worker schema is incompatible with the rebuilt `flashcards` and
+`vocabulary_catalog` tables. Schedule the staging migration together with the
+matching Worker release; an old Worker must not continue serving writes against
+the new schema. Never apply this migration from routine build, CI or deploy
+commands.
+
+### Staging operator procedure
+
+This is an operator runbook only. It was not executed as part of Issue #91; no
+remote D1 write is authorized by the PR.
+
+1. Select the reviewed commit intended for staging. Verify the authenticated
+   Cloudflare account and confirm `relai-staging-db` and its exact database ID
+   using [D1 environments](d1-environments.md). Confirm remotely that 0001–0004
+   are applied and 0005 alone is pending:
+
+   ```sh
+   npm run verify:d1-config
+   npx wrangler d1 info relai-staging-db --config wrangler.jsonc --env staging --json
+   npm run db:migrations:list:staging
+   ```
+
+2. Take a recoverable, access-controlled D1 backup/export using the approved
+   Cloudflare operator procedure. Do not put the export or credentials in the
+   repository. Restore a copy into an isolated local D1 and rehearse 0005 there;
+   compare pre/post counts and representative IDs/content for users, sessions,
+   source_items, settings, stats, old source catalog rows, personal vocabulary,
+   cards, favorites and review events. Run `PRAGMA foreign_key_check` on the copy
+   and confirm every vocabulary card joins a catalog entry. The committed local
+   migration preservation test can be run with `npm run test:d1-schema`.
+
+3. Coordinate a staging maintenance window because the old and new Worker
+   schemas are not mutually compatible. Reconfirm the target, pending SQL and
+   backup before the explicit write:
+
+   ```sh
+   npm run db:migrations:apply:staging
+   npm run db:migrations:list:staging
+   ```
+
+4. Deploy the matching reviewed Worker build immediately after migration, then
+   run `npm run verify:d1-schema:staging` and authorized staging smoke checks.
+   Verify 0005 is recorded exactly once, all vocabulary cards resolve to catalog
+   entries, and favorites, review history, stats, settings and source/onboarding
+   records retain their pre-migration values. Record the commit, backup reference,
+   migration and verification evidence. If migration or verification fails, stop;
+   do not delete rows or repair the schema with ad hoc Dashboard SQL.
 
 Run all commands from the repository root with the installed Wrangler. Each
 command selects the database name, source config and environment explicitly.

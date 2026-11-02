@@ -38,6 +38,7 @@ export async function bootstrapStarterPack(
         ON catalog.id = expected.id AND catalog.headword = expected.headword
           AND catalog.normalized_key = expected.normalized_key AND catalog.part_of_speech = expected.part_of_speech
       WHERE catalog.source_dataset = ? AND catalog.source_version = ? AND catalog.cefr_level = 'B1'
+        AND catalog.publication_status = 'published'
         AND NULLIF(TRIM(catalog.zh_tw_definition), '') IS NOT NULL
         AND NULLIF(TRIM(catalog.english_example), '') IS NOT NULL
         AND NULLIF(TRIM(catalog.zh_tw_example_translation), '') IS NOT NULL
@@ -51,15 +52,14 @@ export async function bootstrapStarterPack(
   const values = ids.map(() => '(?, ?)').join(', ')
   const statements: PersistenceStatement[] = [
     db.prepare(`WITH chosen(catalog_id, card_id) AS (VALUES ${values})
-      INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id,
-        vocabulary_key, created_at, updated_at)
-      SELECT chosen.card_id, ?, 'vocabulary', catalog.id, catalog.normalized_key, ?, ?
+      INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id, created_at, updated_at)
+      SELECT chosen.card_id, ?, 'vocabulary', catalog.id, ?, ?
       FROM chosen JOIN vocabulary_catalog AS catalog ON catalog.id = chosen.catalog_id
       WHERE NOT EXISTS (
         SELECT 1 FROM user_settings WHERE user_id = ? AND english_level IS NOT NULL
       ) AND NOT EXISTS (
         SELECT 1 FROM flashcards AS owned WHERE owned.user_id = ?
-          AND owned.card_type = 'vocabulary' AND owned.vocabulary_key = catalog.normalized_key
+          AND owned.card_type = 'vocabulary' AND owned.vocabulary_catalog_id = catalog.id
       ) ON CONFLICT DO NOTHING`)
       .bind(...ids.flat(), userId, at, at, userId, userId),
     db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)

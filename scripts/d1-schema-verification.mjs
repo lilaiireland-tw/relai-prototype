@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 // Shared metadata-only assertions: no seeds or writes in the verifier.
 export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name"
 
-export function verifyCoreSchema(execute) {
+export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
   const query = (sql) => execute(sql).flatMap((response) => response.results)
   const schema = () => query(schemaSql)
   const prd = readFileSync('ReLai_PRD_v3.4.md', 'utf8')
@@ -40,16 +40,23 @@ export function verifyCoreSchema(execute) {
       ({ name, type, notnull, dflt_value, pk }))
     assert.deepEqual(columns, expected, `${table}: exact PRD columns, types, nullability, defaults and primary keys`)
     const foreignKeys = query(`PRAGMA foreign_key_list('${table}')`)
-    assert.deepEqual(foreignKeys, table === 'flashcards'
-      ? [
-        { id: 0, seq: 0, table: 'user_vocabulary_items', from: 'user_vocabulary_item_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
-        { id: 0, seq: 1, table: 'user_vocabulary_items', from: 'user_id', to: 'user_id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
-        { id: 0, seq: 2, table: 'user_vocabulary_items', from: 'vocabulary_key', to: 'normalized_key', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
-        { id: 1, seq: 0, table: 'vocabulary_catalog', from: 'vocabulary_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
-        { id: 1, seq: 1, table: 'vocabulary_catalog', from: 'vocabulary_key', to: 'normalized_key', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
-      ]
-      : [], 'Only the vocabulary source links have foreign key semantics')
-    assert.equal(query(`SELECT COUNT(*) AS count FROM ${table}`)[0].count, 0, 'Migration must not seed data')
+    const expectedForeignKeys = {
+      flashcards: [
+        { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'vocabulary_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ],
+      vocabulary_catalog_sources: [
+        { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'canonical_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ],
+      vocabulary_catalog_versions: [
+        { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ],
+      vocabulary_catalog_candidates: [
+        { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+        { id: 1, seq: 0, table: 'vocabulary_catalog', from: 'target_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ],
+    }
+    assert.deepEqual(foreignKeys, expectedForeignKeys[table] ?? [], `${table}: unexpected foreign keys`)
+    if (requireEmpty) assert.equal(query(`SELECT COUNT(*) AS count FROM ${table}`)[0].count, 0, 'Clean migration replay must not seed data')
   }
   for (const [table, columns] of [
     ['users', ['username']], ['sessions', ['token_digest']], ['sessions', ['user_id']],
@@ -60,19 +67,26 @@ export function verifyCoreSchema(execute) {
   ]) assert.ok(hasIndex(table, columns), `${table}(${columns}) index required`)
   for (const [table, columns] of [
     ['vocabulary_catalog', ['cefr_level', 'id']],
-    ['vocabulary_catalog', ['normalized_key']],
+    ['vocabulary_catalog', ['normalized_key', 'part_of_speech_key']],
     ['flashcards', ['user_id', 'vocabulary_catalog_id']],
-    ['flashcards', ['user_id', 'user_vocabulary_item_id']],
-    ['flashcards', ['user_id', 'vocabulary_key']],
+    ['vocabulary_catalog_versions', ['catalog_id', 'version']],
+    ['vocabulary_catalog_candidates', ['status', 'created_at']],
   ]) assert.ok(hasIndex(table, columns), `${table}(${columns}) index required`)
   assert.ok(hasIndex('user_vocabulary_items', ['user_id', 'normalized_key'], true),
     'Personal vocabulary identity must be unique per user')
-  assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
-    index.index_name === 'idx_vocabulary_catalog_source_identity' && index.is_unique === 1),
-  'Catalog identity must be unique including missing part of speech')
+  for (const name of ['idx_vocabulary_catalog_published_sense', 'idx_vocabulary_catalog_private_sense']) {
+    assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
+      index.index_name === name && index.is_unique === 1), `Catalog sense identity index ${name} must be unique`)
+  }
+  assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog_sources' &&
+    index.index_name === 'idx_vocabulary_catalog_sources_source_identity' && index.is_unique === 1),
+  'Catalog source identity must remain unique')
   assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
     index.index_name === 'idx_vocabulary_catalog_id_key' && index.is_unique === 1),
-  'Catalog source references must keep their normalized identity')
+  'Canonical catalog IDs must retain their normalized identity')
+  assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog_sources' &&
+    index.index_name === 'idx_vocabulary_catalog_sources_id_key' && index.is_unique === 1),
+  'Archived source IDs must retain normalized identity')
 
   const history = query('SELECT name FROM d1_migrations ORDER BY id')
   const migrations = readdirSync('migrations').filter((name) => name.endsWith('.sql')).sort()

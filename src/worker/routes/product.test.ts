@@ -62,12 +62,12 @@ describe('authenticated product APIs', () => {
     guarded = await session('guarded', true)
     const addCard = (id: string, userId: string, type: 'vocabulary' | 'error_log' = 'vocabulary', reviewed: string | null = null) => {
       if (type === 'vocabulary') {
-        sqlite.prepare(`INSERT INTO user_vocabulary_items (id, user_id, headword, normalized_key, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)`).run(`item-${id}`, userId, id, id, now, now)
-        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, user_vocabulary_item_id,
-          vocabulary_key, last_reviewed_at, created_at, updated_at)
-          VALUES (?, ?, 'vocabulary', ?, ?, ?, ?, ?)`)
-          .run(id, userId, `item-${id}`, id, reviewed, now, now)
+        sqlite.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, source_dataset,
+          source_version, provenance, created_at, updated_at) VALUES (?, ?, ?, 'test', '1', 'fixture', ?, ?)`)
+          .run(id, id, id, now, now)
+        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id,
+          last_reviewed_at, created_at, updated_at) VALUES (?, ?, 'vocabulary', ?, ?, ?, ?)`)
+          .run(id, userId, id, reviewed, now, now)
       } else {
         sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
           last_reviewed_at, created_at, updated_at) VALUES (?, ?, 'error_log', ?, 'back', ?, ?, ?)`)
@@ -149,7 +149,7 @@ describe('authenticated product APIs', () => {
   })
 
   it('strictly whitelists card fields and keeps card type and catalog identity immutable', async () => {
-    for (const key of ['id', 'user_id', 'card_type', 'vocabulary_catalog_id', 'vocabulary_key',
+    for (const key of ['id', 'user_id', 'card_type', 'vocabulary_catalog_id',
       'source_item_id', 'source', 'created_at', 'updated_at', 'last_reviewed_at', 'next_review_at', 'is_favorite']) {
       for (const cardId of ['a', 'b']) {
         expect((await request(`/cards/${cardId}`, owner, 'PATCH',
@@ -181,7 +181,7 @@ describe('authenticated product APIs', () => {
         '1.6', 'fixture', '能力', 'She has the ability to learn.', ?, ?)`).run(now, now)
     for (const [id, userId] of [['shared-owner', 'owner'], ['shared-other', 'other']]) {
       sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id,
-        vocabulary_key, created_at, updated_at) VALUES (?, ?, 'vocabulary', 'shared-word', 'ability', ?, ?)`)
+        created_at, updated_at) VALUES (?, ?, 'vocabulary', 'shared-word', ?, ?)`)
         .run(id, userId, now, now)
     }
     const response = await request('/cards/shared-owner')
@@ -253,6 +253,6 @@ describe('authenticated product APIs', () => {
     expect(changed.status).toBe(200)
     expect(await changed.json()).toMatchObject({ settings: { english_level: 'B2', daily_goal: 5 } })
     expect(count('flashcards')).toBe(5)
-    expect(count('vocabulary_catalog')).toBe(0)
+    expect(count('vocabulary_catalog')).toBe(4)
   })
 })

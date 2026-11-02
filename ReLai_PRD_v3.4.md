@@ -12,7 +12,7 @@
 >
 > v1 Closed Beta 採用：
 >
-> `React + Vite + Cloudflare Workers + Hono + Cloudflare D1`；Gemini API 是後續 AI 擷取階段的預定供應商。
+> `React + Vite + Cloudflare Workers + Hono + Cloudflare D1`；Gemini API 用於圖片詞彙擷取與受驗證的詞彙補全。
 >
 > 不採用舊方案中的：
 >
@@ -526,16 +526,13 @@ next_review_at TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 vocabulary_catalog_id TEXT
-user_vocabulary_item_id TEXT
-vocabulary_key TEXT
 ```
 
-Catalog-backed vocabulary cards store only `vocabulary_catalog_id`, the normalized
-identity key, and per-user learning state. Lexical fields are read from
-`vocabulary_catalog`. Personal captured vocabulary is stored in
-`user_vocabulary_items` and referenced by `user_vocabulary_item_id`. Error Log
-content remains directly on its user-owned `flashcards` row and has no catalog
-or personal-vocabulary reference. A vocabulary card has exactly one source.
+Vocabulary cards store only the canonical `vocabulary_catalog_id` and per-user
+learning state. Headword, part of speech, sense, definitions, examples and
+translations are read from `vocabulary_catalog`; a card cannot override shared
+lexical content. Error Log content remains directly on its user-owned
+`flashcards` row and has no catalog reference.
 
 `card_type`：
 
@@ -544,7 +541,7 @@ vocabulary
 error_log
 ```
 
-`vocabulary_catalog_id` 可追溯至共用目錄的 `id`；同一使用者與目錄條目只能連結一張卡。`vocabulary_key` 是個人 vocabulary 卡的非空、trim 後小寫標準化 identity，同一使用者不可重複。兩欄可為 null，以保留現有卡片；非 null 時只可用於 vocabulary 卡。Bootstrap 和後續 AI 匯入須提供相同的標準化 key，避免為同一使用者重複建立單字卡。
+`vocabulary_catalog_id` 必須指向已發布且內容完整的 canonical catalog record；同一使用者與目錄條目只能連結一張卡。詞彙卡不得保存使用者自有的重複詞義欄位。舊 `user_vocabulary_items` 表保留作為遷移後的封存資料，不再作為新卡片的來源。
 
 ## `review_events`
 
@@ -577,6 +574,43 @@ id TEXT PK
 headword TEXT NOT NULL
 normalized_key TEXT NOT NULL
 part_of_speech TEXT
+part_of_speech_key TEXT NOT NULL DEFAULT 'unknown'
+sense_key TEXT NOT NULL DEFAULT 'legacy'
+semantic_sense TEXT NOT NULL DEFAULT 'Legacy catalog entry'
+cefr_level TEXT
+source_dataset TEXT NOT NULL
+source_version TEXT NOT NULL
+provenance TEXT NOT NULL
+zh_tw_definition TEXT
+english_example TEXT
+zh_tw_example_translation TEXT
+irish_usage TEXT
+publication_status TEXT NOT NULL DEFAULT 'published'
+owner_user_id TEXT
+model TEXT
+prompt_version TEXT
+content_version INTEGER NOT NULL DEFAULT 1
+content_hash TEXT
+published_at TEXT
+created_at TEXT NOT NULL
+updated_at TEXT NOT NULL
+```
+
+Canonical identity is `(normalized_key, part_of_speech_key, sense_key)`, so distinct
+senses remain separate. A published entry is shared by all users; legacy
+`review_needed` entries remain private to `owner_user_id`. `cefr_level` is nullable
+for AI-created vocabulary and accepts only A1–B2 when known; AI must not invent a
+level. Source identity and provenance remain traceable. Nullable lexical fields
+may be enriched only when missing, with each content change recorded in
+`vocabulary_catalog_versions`; published non-empty fields are never overwritten.
+
+## `vocabulary_catalog_sources`
+
+```text
+id TEXT PK
+headword TEXT NOT NULL
+normalized_key TEXT NOT NULL
+part_of_speech TEXT
 cefr_level TEXT NOT NULL
 source_dataset TEXT NOT NULL
 source_version TEXT NOT NULL
@@ -587,9 +621,68 @@ zh_tw_example_translation TEXT
 irish_usage TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
+canonical_catalog_id TEXT
 ```
 
-共用目錄僅供 CEFR-J Vocabulary Profile A1–B2；`cefr_level` 只接受 A1、A2、B1、B2，不加入 C1/C2。`normalized_key` 是非空、trim 後小寫的穩定字詞 identity。相同 `source_dataset`、`source_version`、`cefr_level`、`normalized_key` 與 `part_of_speech`（含缺值）不得重複。來源、版本與 `provenance` 保留可追溯性；ReLai 自有的中文釋義、英語例句、繁中例句翻譯及愛爾蘭用法可以為 null。此 schema 不匯入目錄資料，也不建立 starter cards。
+Append-only archive of the pre-B5.4 catalog source rows. Original IDs and
+published source values remain intact; `canonical_catalog_id` maps each source
+row to its shared lexical record. The CEFR-J source import continues to preserve
+dataset/version/level identity here.
+
+## `vocabulary_catalog_versions`
+
+```text
+id TEXT PK
+catalog_id TEXT NOT NULL
+version INTEGER NOT NULL
+content_hash TEXT
+zh_tw_definition TEXT
+english_example TEXT
+zh_tw_example_translation TEXT
+irish_usage TEXT
+provenance TEXT NOT NULL
+model TEXT
+prompt_version TEXT
+created_at TEXT NOT NULL
+```
+
+Immutable snapshot for the initial catalog content and each accepted enrichment.
+
+## `vocabulary_catalog_candidates`
+
+```text
+id TEXT PK
+owner_user_id TEXT NOT NULL
+source_item_id TEXT NOT NULL
+headword TEXT NOT NULL
+normalized_key TEXT NOT NULL
+part_of_speech TEXT NOT NULL
+part_of_speech_key TEXT NOT NULL
+sense_key TEXT NOT NULL
+semantic_sense TEXT NOT NULL
+source_context TEXT NOT NULL
+target_catalog_id TEXT
+zh_tw_definition TEXT
+english_example TEXT
+zh_tw_example_translation TEXT
+irish_usage TEXT
+status TEXT NOT NULL
+catalog_id TEXT
+model TEXT NOT NULL
+prompt_version TEXT NOT NULL
+validation_status TEXT NOT NULL
+validation_confidence REAL
+provenance TEXT NOT NULL
+content_hash TEXT
+reviewed_by TEXT
+reviewed_at TEXT
+created_at TEXT NOT NULL
+updated_at TEXT NOT NULL
+```
+
+This table and its admin API are retained for legacy review records. The normal
+image vocabulary flow does not create candidates or wait for administrator
+approval; ambiguous senses return catalog options for the user to resolve.
 
 ## `user_vocabulary_items`
 
@@ -608,10 +701,10 @@ created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 ```
 
-`user_vocabulary_items` is the future source for vocabulary captured from a
-user's own text or images. It is user-owned and unique by `(user_id,
-normalized_key)`. Shared catalog content remains exclusively in
-`vocabulary_catalog`.
+`user_vocabulary_items` is a retained legacy table for vocabulary captured
+before B5.4. Existing rows are preserved and their cards are remapped to private
+`review_needed` catalog records; new vocabulary saves publish directly to
+`vocabulary_catalog`. The candidate table remains for legacy review records.
 
 ## `user_settings`
 
@@ -754,7 +847,23 @@ Cloudflare Worker secret only。
 
 # 十六、AI Structured Output
 
-AI 的責任是 extraction，不是決定 application authorization / persistence。
+AI 的責任是 extraction、sense matching 與缺漏詞彙內容生成；Worker 以 strict JSON Schema 與 deterministic field validation 驗證回應，不要求第二次 AI validation 或 administrator approval。AI 不決定 application authorization / persistence。
+
+Vocabulary image extraction returns up to 10 English headwords with part of
+speech, semantic sense, source context and confidence. The Worker searches by
+normalized headword and part of speech, then preserves identity by
+`(normalized_key, part_of_speech_key, sense_key)`. A complete matching published
+record reuses its canonical ID. Only missing fields are generated for incomplete
+records, and empty fields are filled without overwriting published content. New
+words and senses generate a definition, example and Traditional Chinese
+translation, then publish after strict schema and deterministic field checks.
+Uncertain sense matches return explicit catalog options for the user to choose;
+they are never merged by word spelling alone. Eligible words create user cards
+immediately, each referencing the canonical catalog ID and retaining its
+`source_item_id`; catalog provenance records the model and prompt. Per-word
+statuses allow a partial batch to succeed, and the response returns the created
+cards. The normal flow has no second AI validation request or administrator
+approval step. Source images are discarded after extraction.
 
 預期 schema：
 
@@ -872,7 +981,7 @@ Prefix：
 /relaiapp/api/v1
 ```
 
-目前已實作 `GET /health`、下列 Auth、Onboarding、Cards、Reviews、Stats、Settings 端點；Ingestion 仍為後續規格，尚未實作。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
+目前已實作 `GET /health`、Auth、Onboarding、Cards、Reviews、Stats、Settings，以及 `POST /vocabulary/image`、`POST /vocabulary/save`。管理員 review API 僅保留處理既有 legacy candidates；新圖片單字會逐項回傳結果並直接建立可用卡片。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
 
 ## Auth
 
@@ -891,12 +1000,23 @@ POST /onboarding/level
 
 初始 CEFR-J 級別選擇會從共用目錄複製最多 100 張同級別 starter cards，支援重試與去重；詳見 [starter API](docs/onboarding-starter-api.md)。
 
-## Ingestion（尚未實作）
+## Vocabulary image capture
 
 ```text
-POST /ingestion/text
-POST /ingestion/image
+POST /vocabulary/image
+POST /vocabulary/save
+GET  /vocabulary/review       (admin)
+POST /vocabulary/review/:id   (admin)
 ```
+
+Image extraction returns contract version 1, a user-owned `source_item_id` and
+up to 10 suggestions containing `headword`, `part_of_speech`, `semantic_sense`,
+`source_context` and `confidence`. The client submits all suggestions
+automatically. Results are explicitly `saved`, `already_saved`, `ambiguous` or
+`not_saved`; an ambiguous result includes the item and published sense options
+for user resolution. The response includes the saved card records for immediate
+display and direct links. Source images are discarded after extraction. The
+admin review endpoints remain only for existing legacy candidates.
 
 ## Cards
 
@@ -968,16 +1088,11 @@ AI error：
 source_item.failed
 ```
 
-避免：
-
-```text
-AI 成功一半
-→ DB 寫兩張
-→ 第三張 validation fail
-→ 留下一半資料
-```
-
-Cards persistence 應視為一個完整 operation。
+For B5.4 image vocabulary, each word is its own atomic write unit. Eligible
+words are saved even when another word is ambiguous or invalid, and every item
+returns an individual status. The canonical update, version snapshot, user card
+and stats update for one word remain atomic. Other ingestion flows define their
+own transaction boundary.
 
 ---
 
@@ -1401,7 +1516,7 @@ wrangler.jsonc
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql`、`0003_add_cefr_j_vocabulary_foundation.sql` 與 `0004_normalize_vocabulary_ownership.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
+兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001` 至 `0005_canonical_sense_aware_vocabulary.sql`。0005 保留已存在的學習與來源資料、封存原 CEFR-J rows，並改用詞義感知 canonical catalog；不得重跑 0001–0004。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行，staging 操作見 [D1 migration 流程](docs/d1-migrations.md)。
 
 `npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging。Production 從 `main` 走受保護的手動發布流程；目前不可將 `npm run deploy:production` 視為已驗證的 production 部署指令，因為它在 production 建置後執行未指定設定檔的 `wrangler deploy`，而根目錄設定預設指向 staging。首次 production 發布前，須另行驗證產生的設定檔、Worker／D1 綁定與確切部署指令，並取得發布授權。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
 
@@ -1492,14 +1607,10 @@ Cloudflare URL 可正常載入
 - Cards／Reviews／Stats／Settings authenticated API 已完成（#66）
 - 前端 starter bootstrap 與產品 API 整合已實作（#67）；卡片翻面／瀏覽不建立複習，僅明確完成動作提交 review event
 
-## Phase 5 — AI（尚未開始）
+## Phase 5 — AI（進行中）
 
-- text ingestion
-- image ingestion
-- prompt
-- Zod structured output
-- retry
-- latency
+- B5.4 圖片詞彙辨識與 sense-aware canonical catalog reuse/enrichment 已實作；新詞彙會通過 deterministic field validation 後立即發布並建立卡片，模糊詞義由使用者選擇既有詞義；staging migration 與操作驗證待依手冊進行
+- text ingestion、Error Log AI extraction、retry/latency 產品驗收尚未完成
 
 ## Phase 6 — PWA（尚未開始）
 

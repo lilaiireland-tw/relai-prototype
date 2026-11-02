@@ -5,8 +5,9 @@
 structural subset of the Cloudflare D1 binding needed here (`prepare`, `bind`,
 `first`, `run`, `all`); no adapter, ORM, global binding or route SQL is required.
 Users, sessions, flashcards, review events, user stats and user settings
-repositories are implemented. The product API and screens do not yet use the
-product repositories. Issue #39 adds
+repositories are implemented and used by the authenticated product APIs. B5.4
+adds the canonical vocabulary catalog save/review repository path; card reads
+join that catalog so lexical content is not copied onto a user card. Issue #39 adds
 `users.listAccounts()`, a fixed safe-field projection for internal account
 management; it never selects credential salts or digests and rejects failed D1
 results rather than returning an empty success.
