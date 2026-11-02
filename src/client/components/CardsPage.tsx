@@ -75,7 +75,7 @@ function CardViewer({ card, reload, next }: { card: Flashcard; reload: () => voi
     <button type="button" disabled={busy} aria-pressed={card.is_favorite} aria-label={card.is_favorite ? '取消收藏' : '收藏卡片'} onClick={() => void mutate(() => clientData.setFavorite(card.id, !card.is_favorite))} className="flex items-center gap-1">
      <Star size={18} className={card.is_favorite ? 'fill-irish-green text-irish-green' : ''} />收藏
     </button>
-    <button type="button" disabled={busy} onClick={() => { setEditing(true); setDeleting(false) }}>編輯</button>
+    {card.card_type === 'error_log' && <button type="button" disabled={busy} onClick={() => { setEditing(true); setDeleting(false) }}>編輯</button>}
     <button type="button" disabled={busy} onClick={() => { setDeleting(true); setEditing(false) }}>刪除</button>
    </div>
    {editing ? <CardEditor card={card} busy={busy} cancel={() => setEditing(false)} save={patch => void mutate(async () => { await clientData.updateCard(card.id, patch); setEditing(false) })} /> : <CardContent card={card} flipped={flipped} />}

@@ -10,6 +10,9 @@ Check remote migration history before code that depends on a migration is deploy
 `0004_normalize_vocabulary_ownership.sql` resets prototype flashcards, reviews,
 stats and selected levels rather than backfilling disposable learning data. It
 must only be applied remotely through a separately approved staging operation.
+Because the old and new Worker schemas are incompatible, coordinate the migration
+with deployment of the Worker that expects the new schema; do not leave the old
+Worker running against the migrated database.
 
 Run all commands from the repository root with the installed Wrangler. Each
 command selects the database name, source config and environment explicitly.
