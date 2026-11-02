@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 
 // Shared metadata-only assertions: no seeds or writes in the verifier.
-export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name"
+export const schemaSql = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name LIMIT 200"
 
 export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
   const query = (sql) => execute(sql).flatMap((response) => response.results)
@@ -25,21 +25,25 @@ export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
     `PRAGMA index_info('${index.index_name}');`).join('\n'))
   const indexes = indexColumns.flatMap((response, position) => response.results.map((column) =>
     ({ ...indexDescriptors[position], column_name: column.name })))
+  const tableInfo = execute(tables.map((table) => `PRAGMA table_info('${table}');`).join('\n'))
+  const foreignKeyLists = execute(tables.map((table) => `PRAGMA foreign_key_list('${table}');`).join('\n'))
+  assert.equal(tableInfo.length, tables.length)
+  assert.equal(foreignKeyLists.length, tables.length)
   const hasIndex = (table, columns, unique = false) => indexes.some((index) =>
     index.table_name === table && (!unique || index.is_unique === 1) &&
     JSON.stringify(indexes.filter((row) => row.index_name === index.index_name).map((row) => row.column_name)) === JSON.stringify(columns))
 
-  for (const [, table, definition] of definitions) {
+  for (const [position, [, table, definition]] of definitions.entries()) {
     const expected = definition.trim().split(/\r?\n/).map((line) => {
       const [name, type] = line.split(' ')
       if (line.includes('UNIQUE')) assert.ok(hasIndex(table, [name], true), `${table}.${name} must be unique`)
       return { name, type, notnull: Number(line.includes('NOT NULL')),
         dflt_value: line.match(/DEFAULT (.+)$/)?.[1] ?? null, pk: Number(line.includes('PK')) }
     })
-    const columns = query(`PRAGMA table_info('${table}')`).map(({ name, type, notnull, dflt_value, pk }) =>
+    const columns = tableInfo[position].results.map(({ name, type, notnull, dflt_value, pk }) =>
       ({ name, type, notnull, dflt_value, pk }))
     assert.deepEqual(columns, expected, `${table}: exact PRD columns, types, nullability, defaults and primary keys`)
-    const foreignKeys = query(`PRAGMA foreign_key_list('${table}')`)
+    const foreignKeys = foreignKeyLists[position].results
     const expectedForeignKeys = {
       flashcards: [
         { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'vocabulary_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
@@ -88,7 +92,7 @@ export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
     index.index_name === 'idx_vocabulary_catalog_sources_id_key' && index.is_unique === 1),
   'Archived source IDs must retain normalized identity')
 
-  const history = query('SELECT name FROM d1_migrations ORDER BY id')
+  const history = query('SELECT name FROM d1_migrations ORDER BY id LIMIT 50')
   const migrations = readdirSync('migrations').filter((name) => name.endsWith('.sql')).sort()
   assert.deepEqual(history.map((row) => row.name), migrations, 'History must match committed SQL files')
   return { schema: initialSchema, history, tables, indexes }

@@ -20,6 +20,9 @@ export default defineConfig(({ mode, isPreview }) => {
 
   return {
     base: '/relaiapp/',
-    plugins: [react(), cloudflare({ viteEnvironment: { name: 'relai_prototype' } })],
+    plugins: [react(), cloudflare({
+      config: config => { config.secrets = { required: [] } },
+      viteEnvironment: { name: 'relai_prototype' },
+    })],
   }
 })

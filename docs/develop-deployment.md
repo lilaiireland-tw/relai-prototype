@@ -16,6 +16,16 @@ in the Cloudflare Dashboard. GitHub Actions runs only the existing PR quality ch
 `.github/workflows/ci.yml`. No Actions workflow deploys this environment, and no
 GitHub staging environment or deployment secrets are required.
 
+Issue #95 added a fail-closed gate to every repository Wrangler operation and
+staging health request. A deployment stops before Wrangler starts unless the
+specific invocation has Product Owner authorization and both
+`--approve-remote-cloudflare` and
+`RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT`.
+The configured Cloudflare Builds command does not carry that opt-in, so it fails
+closed until the Product Owner explicitly authorizes a deployment and arranges
+both opt-ins for that build. Do not store the approval value as a permanent
+build variable or add it to routine CI.
+
 The repository supplies two commands for Cloudflare:
 
 - `npm run build:staging:validated`: lint, typecheck, tests, staging build and
@@ -116,14 +126,15 @@ deployments. Manual recovery is an operator action, not a second automated owner
 npm ci
 unset CLOUDFLARE_ENV
 npm run build:staging:validated
-STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run deploy:staging:built
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run deploy:staging:built -- --approve-remote-cloudflare
 ```
 
 For read-only health verification in PowerShell:
 
 ```powershell
 $env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
-npm.cmd run verify:staging-health
+$env:RELAI_REMOTE_CLOUDFLARE_APPROVAL = 'I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT'
+npm.cmd run verify:staging-health -- --approve-remote-cloudflare
 ```
 
 For manual recovery in PowerShell, remove the inherited variable before running
@@ -133,7 +144,8 @@ the build and deploy commands:
 Remove-Item Env:CLOUDFLARE_ENV -ErrorAction SilentlyContinue
 npm.cmd run build:staging:validated
 $env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
-npm.cmd run deploy:staging:built
+$env:RELAI_REMOTE_CLOUDFLARE_APPROVAL = 'I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT'
+npm.cmd run deploy:staging:built -- --approve-remote-cloudflare
 ```
 
 Environment selection happens at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).

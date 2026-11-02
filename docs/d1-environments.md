@@ -12,6 +12,10 @@ local development. Never swap the names/IDs or share a database between environm
 
 ## Provisioning commands used
 
+This is a historical transcript of the 2026-09-28 provisioning; the remote
+commands below are evidence of past operations and must not be rerun as a current
+workflow. Issue #95 added fail-closed approval gates to repository remote commands.
+
 On 2026-09-28, inspected `wrangler.jsonc`, then listed the authenticated account's
 D1 resources. Neither ReLai database existed. The two existing
 `lilai-applications-*` databases were left untouched. Created each ReLai database
@@ -34,14 +38,17 @@ added explicitly under the correct environments. During provisioning, Wrangler
 warned that staging was not yet configured and production did not yet have a
 binding. Final configuration resolves both environments without those warnings.
 On Windows PowerShell, `npx.cmd` / `npm.cmd` were used when script execution policy
-blocked the `.ps1` launchers (the initial list used `npx`). Local checks set
-`WRANGLER_LOG_PATH` to a temporary directory to avoid writing outside the workspace.
+blocked the `.ps1` launchers (the initial list used `npx`). Issue #95 routes local
+Wrangler logs to an ignored repository-local `.wrangler/logs` directory.
 
 **Do not rerun creation blindly.** List first and reuse each exact existing name.
 If a matching name cannot be resolved unambiguously, stop and investigate. Never
 delete/recreate a database to resolve configuration problems.
 
 ## Build and configuration verification
+
+Use these local checks for routine development. Remote Wrangler dry-runs in the
+historical Issue #14 evidence are not current instructions.
 
 ```sh
 npm run lint
@@ -51,10 +58,6 @@ npm run verify:d1-config
 npm run test:routing
 npm run build
 npm run build:production
-npx wrangler deploy --dry-run
-npm run build
-npx wrangler deploy --dry-run
-npx wrangler types "$env:TEMP/relai-14-env.d.ts" --config wrangler.jsonc --env staging --include-runtime=false
 ```
 
 `verify:d1-config` uses Wrangler's resolver with explicit source config, checking
@@ -92,9 +95,11 @@ The migration workflow does not apply migrations through CI or ordinary deploys.
 ## Deployment selection
 
 From `develop`, `npm run deploy` rebuilds staging before deploying. From `main`,
-`npm run deploy:production` rebuilds production before deploying. Branch-to-environment
-selection is an operator rule; Git alone does not select bindings. No CD workflow,
-route/domain configuration, or actual Worker deployment follows from this mapping alone.
+`npm run deploy:production` rebuilds production before deploying. Both commands
+fail closed unless the specific invocation has Product Owner authorization and
+both remote approval opt-ins. Branch-to-environment selection is an operator rule;
+Git alone does not select bindings. No CD workflow, route/domain configuration,
+or actual Worker deployment follows from this mapping alone.
 
 ## Validation evidence and safety
 

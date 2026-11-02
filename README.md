@@ -60,8 +60,12 @@ npm run test:routing
 經授權的帳號操作須透過受保護的程序環境提供目標環境對應的 `AUTH_PEPPER`，並遵循[帳號管理手冊](docs/admin-accounts.md)。互動式建立 staging 帳號的指令為：
 
 ```sh
-npm run user:manage -- create --interactive --env staging
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- create --interactive --env staging --approve-remote-cloudflare
 ```
+
+This is a remote D1 operation. Run it only with Product Owner authorization for
+that account action and the two opt-ins shown; do not keep the approval variable
+in a routine shell or CI environment.
 
 一般本機驗證不應操作真實帳號或遠端資料庫。
 
@@ -90,3 +94,17 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 Cards API 的 `needs_review` 僅接受 `true`（從未複習或超過七天未複習）；省略表示不套用此篩選，`false` 回傳 400。卡片 PATCH 僅允許學習內容欄位；Error Log 的錯誤類型使用既有 `part_of_speech` 儲存欄位。複習由明確完成動作提交，具備事件冪等性與 D1 batch transaction；設定級別變更不刪除卡片或新增 starter pack。
 
 產品行為以 [PRD](ReLai_PRD_v3.4.md) 為準；實作與部署以本 README 及相關操作手冊為準。個別任務範圍以指定的 GitHub Issue 或產品負責人指示為準。
+
+## P0 Cloudflare read-quota guardrails (Issue #95)
+
+Following the 2026-11-02 D1 read-quota incident, routine development and PR checks must use isolated local services only. A read-only remote query can still consume the account's daily D1 row-read quota. Do not run remote D1 SQL/schema checks, staging health checks, deployed API smoke tests, remote migrations, Wrangler tail/deploy, or remote Queue/R2 operations without separate Product Owner authorization.
+
+Safe routine checks include `npm test`, `npm run test:d1-schema`, `npm run test:e2e`, `npm run lint`, `npm run typecheck`, and `npm run build`. Local-check wrappers clear Cloudflare/Google/Gemini credentials and block outbound Node traffic; Playwright blocks non-loopback browser requests. CI asserts empty credentials in both jobs. D1 schema tests use temporary local persistence; E2E uses `e2e/wrangler.jsonc` and local D1.
+
+Direct `wrangler`/`npx wrangler` commands bypass repository approval wrappers. Routine Codex execution must have no Cloudflare, Google or Gemini credentials, no accessible cached Wrangler authentication, and no secret bindings in local Worker processes. The staging and production Wrangler environments exclude `.dev.vars` secrets during local work. Do not use direct Wrangler commands for remote operations.
+
+Remote operator scripts are not PR checks. They fail closed unless both `--approve-remote-cloudflare` and `RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT` are supplied, and still require separate, narrowly scoped Product Owner approval for each action. Staging approval never authorizes production. Do not set this opt-in for routine work. The staging schema verifier checks bounded schema metadata only; it does not count application rows or run `PRAGMA foreign_key_check`.
+
+The existing Cloudflare Workers Builds deploy command does not supply those opt-ins, so it fails closed. Do not add a permanent approval variable to Builds; an owner-approved deployment must provide both opt-ins only for that specific run.
+
+The incident review identifies the strongest repository suspects, but local evidence cannot attribute the 2026-11-02 quota event or identify the billed database. Historical Dashboard analytics require separate approval; no live queries are an acceptable substitute. See the [incident review](docs/d1-read-quota-incident-2026-11-02.md) for evidence and follow-ups.

@@ -73,6 +73,13 @@ describe('CEFR-J catalog import', () => {
     sqlite.close()
   })
 
+  it('rejects source manifests above the published 7,801-row cap before database work', () => {
+    const oversized = { ...fixture, rows: Array.from({ length: 7802 }, (_, index) => ({
+      headword: `word-${index}`, pos: 'noun', CEFR: 'A1',
+    })) }
+    expect(() => validateManifest(oversized)).toThrow(/exceeds the 7801-row CEFR-J 1\.6 limit/)
+  })
+
   it('imports A1–B2 fixture, keeps POS and provenance, and is idempotent without creating cards', async () => {
     const { sqlite, db } = localDatabase()
     expect(await importCatalog(db, fixture)).toEqual({ inserted: 8, skipped: 0, rejected: 0 })

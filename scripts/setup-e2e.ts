@@ -8,6 +8,7 @@ import { e2ePepper, e2eUser } from './e2e-data'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const persistence = resolve(root, '.wrangler/e2e')
+const wranglerHome = resolve(persistence, 'config')
 const config = resolve(root, 'e2e/wrangler.jsonc')
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
 
@@ -17,7 +18,9 @@ function wrangler(args: string[]) {
     'd1', ...args, 'relai-e2e-local-only', '--config', config,
     '--local', '--persist-to', persistence], {
     cwd: root, stdio: 'pipe',
-    env: { ...process.env, CLOUDFLARE_ENV: '', CI: 'true', WRANGLER_SEND_METRICS: 'false' },
+    env: { ...process.env, CLOUDFLARE_ENV: '', CI: 'true', WRANGLER_SEND_METRICS: 'false',
+      XDG_CONFIG_HOME: wranglerHome, WRANGLER_REGISTRY_PATH: resolve(persistence, 'registry'),
+      WRANGLER_LOG_PATH: resolve(persistence, 'logs') },
   })
 }
 
@@ -32,6 +35,10 @@ export async function prepareE2E() {
   }
   rmSync(persistence, { recursive: true, force: true })
   mkdirSync(persistence, { recursive: true })
+  mkdirSync(resolve(persistence, 'registry'), { recursive: true })
+  mkdirSync(resolve(persistence, 'logs'), { recursive: true })
+  mkdirSync(resolve(wranglerHome, '.wrangler/registry'), { recursive: true })
+  mkdirSync(resolve(wranglerHome, '.wrangler/logs'), { recursive: true })
   writeFileSync(resolve(root, 'e2e/.dev.vars'), `AUTH_PEPPER=${e2ePepper}\n`)
   wrangler(['migrations', 'apply'])
   const credential = await createPasswordCredential(e2eUser.password, e2ePepper)

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { URL } from 'node:url'
 import { unstable_readConfig as readConfig } from 'wrangler'
+import { prepareDeployConfig } from './prepare-deploy-config.mjs'
 import { verifyStagingBuild, verifyStagingDeployEnvironment } from './verify-staging-build.mjs'
 import { stagingUrls, verifyStagingHealth } from './verify-staging-health.mjs'
 
@@ -12,6 +13,7 @@ const staging = {
   name: 'relai-prototype-staging',
   workers_dev: true,
   routes: [],
+  secrets: { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] },
   observability: { enabled: true, logs: { enabled: true, invocation_logs: true } },
   d1_databases: [{ binding: 'DB', database_name: 'relai-staging-db', database_id: 'staging-id' }],
 }
@@ -60,7 +62,14 @@ test('staging deployment guard rejects a production build, swapped DB, extra bin
     { d1_databases: [{ ...staging.d1_databases[0], database_name: 'relai-prod-db' }] },
     { d1_databases: [{ ...staging.d1_databases[0], database_id: 'production-id' }] },
     { d1_databases: [{ ...staging.d1_databases[0], binding: 'OTHER' }] },
+    { secrets: { required: [] } },
+    { secrets: { required: ['AUTH_PEPPER'] } },
   ]) assert.throws(() => verifyStagingBuild({ ...staging, ...patch }, staging))
+})
+
+test('staging and production deployment flows restore secret names after local builds', () => {
+  assert.match(readFileSync(new URL('./deploy-staging.mjs', import.meta.url), 'utf8'), /prepare-deploy-config\.mjs', 'staging'/)
+  assert.match(readFileSync(new URL('./deploy-production.mjs', import.meta.url), 'utf8'), /prepare-deploy-config\.mjs', 'production'/)
 })
 
 test('staging deploy rejects an inherited Cloudflare environment before Wrangler runs', () => {
@@ -74,7 +83,20 @@ test('staging deploy rejects an inherited Cloudflare environment before Wrangler
 test('staging deploy commands run the environment guard before Wrangler', () => {
   const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   for (const name of ['deploy', 'deploy:staging:built']) {
-    assert.match(scripts[name], /npm run verify:staging-build && wrangler deploy/)
+    assert.match(scripts[name], /deploy-staging\.mjs/)
+  }
+  assert.match(readFileSync(new URL('./deploy-staging.mjs', import.meta.url), 'utf8'), /requireRemoteApproval/)
+})
+
+test('staging and production deployment preparation preserves only required secret names and exact D1 targets', () => {
+  for (const env of ['staging', 'production']) {
+    const source = readConfig({ config: 'wrangler.jsonc', env })
+    const built = { name: source.name, d1_databases: source.d1_databases, secrets: { required: [] } }
+    const prepared = prepareDeployConfig(built, source)
+    assert.deepEqual(prepared.secrets, { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] })
+    assert.deepEqual(prepared.d1_databases, source.d1_databases)
+    assert.throws(() => prepareDeployConfig({ ...built, name: 'wrong-worker' }, source), /must match/)
+    assert.throws(() => prepareDeployConfig({ ...built, d1_databases: [] }, source), /Exactly one built D1/)
   }
 })
 
