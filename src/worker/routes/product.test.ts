@@ -60,10 +60,20 @@ describe('authenticated product APIs', () => {
     owner = await session('owner')
     other = await session('other')
     guarded = await session('guarded', true)
-    const addCard = (id: string, userId: string, type = 'vocabulary', reviewed: string | null = null) =>
-      sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
-        last_reviewed_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'back', ?, ?, ?)`)
-        .run(id, userId, type, id, reviewed, now, now)
+    const addCard = (id: string, userId: string, type: 'vocabulary' | 'error_log' = 'vocabulary', reviewed: string | null = null) => {
+      if (type === 'vocabulary') {
+        sqlite.prepare(`INSERT INTO user_vocabulary_items (id, user_id, headword, normalized_key, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)`).run(`item-${id}`, userId, id, id, now, now)
+        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, user_vocabulary_item_id,
+          vocabulary_key, last_reviewed_at, created_at, updated_at)
+          VALUES (?, ?, 'vocabulary', ?, ?, ?, ?, ?)`)
+          .run(id, userId, `item-${id}`, id, reviewed, now, now)
+      } else {
+        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
+          last_reviewed_at, created_at, updated_at) VALUES (?, ?, 'error_log', ?, 'back', ?, ?, ?)`)
+          .run(id, userId, id, reviewed, now, now)
+      }
+    }
     addCard('a', 'owner')
     addCard('b', 'owner', 'error_log', '2026-09-24T00:30:00.000Z')
     addCard('boundary', 'owner', 'vocabulary', '2026-09-25T00:30:00.000Z')
@@ -148,10 +158,10 @@ describe('authenticated product APIs', () => {
     }
     expect((await request('/cards/a', owner, 'PATCH', { explanation: 'wrong type' })).status).toBe(400)
     expect((await request('/cards/b', owner, 'PATCH', { zh_tw_definition: 'wrong type' })).status).toBe(400)
-    expect((await request('/cards/a', owner, 'PATCH', { back_content: 'edited', zh_tw_definition: 'meaning' })).status).toBe(200)
+    expect((await request('/cards/a', owner, 'PATCH', { back_content: 'edited' })).status).toBe(400)
     expect((await request('/cards/b', owner, 'PATCH', { explanation: 'fixed' })).status).toBe(200)
-    expect(sqlite.prepare("SELECT card_type, back_content FROM flashcards WHERE id = 'a'").get())
-      .toEqual({ card_type: 'vocabulary', back_content: 'edited' })
+    expect(sqlite.prepare("SELECT card_type, front_content, back_content FROM flashcards WHERE id = 'a'").get())
+      .toEqual({ card_type: 'vocabulary', front_content: null, back_content: null })
   })
 
   it('persists Error Log error-type edits through part_of_speech for the owner only', async () => {
@@ -162,6 +172,38 @@ describe('authenticated product APIs', () => {
     expect(await (await request('/cards/b')).json()).toMatchObject({ card: { part_of_speech: 'Grammar' } })
     expect(sqlite.prepare("SELECT card_type, part_of_speech FROM flashcards WHERE id = 'b'").get())
       .toEqual({ card_type: 'error_log', part_of_speech: 'Grammar' })
+  })
+
+  it('serves shared catalog content with independent user ownership and learning state', async () => {
+    sqlite.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, cefr_level,
+      source_dataset, source_version, provenance, zh_tw_definition, english_example, created_at, updated_at)
+      VALUES ('shared-word', 'ability', 'ability', 'noun', 'A1', 'CEFR-J Vocabulary Profile',
+        '1.6', 'fixture', '能力', 'She has the ability to learn.', ?, ?)`).run(now, now)
+    for (const [id, userId] of [['shared-owner', 'owner'], ['shared-other', 'other']]) {
+      sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id,
+        vocabulary_key, created_at, updated_at) VALUES (?, ?, 'vocabulary', 'shared-word', 'ability', ?, ?)`)
+        .run(id, userId, now, now)
+    }
+    const response = await request('/cards/shared-owner')
+    expect(await response.json()).toMatchObject({ card: {
+      front_content: 'ability', back_content: '能力\nShe has the ability to learn.',
+      part_of_speech: 'noun', zh_tw_definition: '能力',
+      source: 'CEFR-J Vocabulary Profile 1.6', is_favorite: false,
+    } })
+    expect(sqlite.prepare("SELECT front_content, back_content, part_of_speech, zh_tw_definition FROM flashcards WHERE id = 'shared-owner'").get())
+      .toEqual({ front_content: null, back_content: null, part_of_speech: null, zh_tw_definition: null })
+
+    expect((await request('/cards/shared-owner/favorite', owner, 'POST', { favorite: true })).status).toBe(200)
+    expect((await request('/reviews', owner, 'POST', event('shared-owner', '123e4567-e89b-42d3-a456-426614174010'))).status).toBe(201)
+    expect(sqlite.prepare("SELECT is_favorite, last_reviewed_at FROM flashcards WHERE id = 'shared-other'").get())
+      .toEqual({ is_favorite: 0, last_reviewed_at: null })
+
+    const otherCard = await request('/cards/shared-other', other)
+    expect(await otherCard.json()).toMatchObject({ card: { is_favorite: false, last_reviewed_at: null } })
+    expect((await request('/cards/shared-owner', owner, 'DELETE')).status).toBe(204)
+    expect(sqlite.prepare("SELECT headword FROM vocabulary_catalog WHERE id = 'shared-word'").get())
+      .toEqual({ headword: 'ability' })
+    expect((await request('/cards/shared-other', other)).status).toBe(200)
   })
 
   it('records explicit completion once and updates local-day goal and streak', async () => {

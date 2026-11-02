@@ -4,8 +4,12 @@ Repository-root [`/migrations`](../migrations/README.md) is the sole ReLai v1
 schema source of truth. Default, staging, and production D1 bindings explicitly
 use `migrations_dir: "migrations"`. The committed history contains
 `0001_initial_core_schema.sql`, `0002_add_users_must_change_password.sql`,
-and `0003_add_cefr_j_vocabulary_foundation.sql`.
+and `0003_add_cefr_j_vocabulary_foundation.sql`, `0004_normalize_vocabulary_ownership.sql`.
 Check remote migration history before code that depends on a migration is deployed.
+
+`0004_normalize_vocabulary_ownership.sql` resets prototype flashcards, reviews,
+stats and selected levels rather than backfilling disposable learning data. It
+must only be applied remotely through a separately approved staging operation.
 
 Run all commands from the repository root with the installed Wrangler. Each
 command selects the database name, source config and environment explicitly.

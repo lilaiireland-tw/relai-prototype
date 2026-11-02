@@ -52,8 +52,8 @@ cards.patch('/:id', async (c) => {
   const repos = createRepositories(c.env.DB)
   const current = await repos.flashcards.find(c.get('user').id, c.req.param('id'))
   if (!current) return c.json(notFound, 404)
-  if ((current.card_type === 'vocabulary' && input.data.explanation !== undefined) ||
-      (current.card_type === 'error_log' && input.data.zh_tw_definition !== undefined)) return c.json(invalidInput, 400)
+  if (current.card_type === 'vocabulary') return c.json(invalidInput, 400)
+  if (input.data.zh_tw_definition !== undefined) return c.json(invalidInput, 400)
   const card = await repos.flashcards.update(c.get('user').id, c.req.param('id'),
     input.data, new Date().toISOString())
   return card ? c.json({ card }) : c.json(notFound, 404)

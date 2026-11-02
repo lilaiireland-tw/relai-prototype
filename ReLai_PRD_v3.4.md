@@ -513,8 +513,8 @@ id TEXT PK
 user_id TEXT NOT NULL
 source_item_id TEXT
 card_type TEXT NOT NULL
-front_content TEXT NOT NULL
-back_content TEXT NOT NULL
+front_content TEXT
+back_content TEXT
 part_of_speech TEXT
 zh_tw_definition TEXT
 explanation TEXT
@@ -526,8 +526,16 @@ next_review_at TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 vocabulary_catalog_id TEXT
+user_vocabulary_item_id TEXT
 vocabulary_key TEXT
 ```
+
+Catalog-backed vocabulary cards store only `vocabulary_catalog_id`, the normalized
+identity key, and per-user learning state. Lexical fields are read from
+`vocabulary_catalog`. Personal captured vocabulary is stored in
+`user_vocabulary_items` and referenced by `user_vocabulary_item_id`. Error Log
+content remains directly on its user-owned `flashcards` row and has no catalog
+or personal-vocabulary reference. A vocabulary card has exactly one source.
 
 `card_type`：
 
@@ -582,6 +590,28 @@ updated_at TEXT NOT NULL
 ```
 
 共用目錄僅供 CEFR-J Vocabulary Profile A1–B2；`cefr_level` 只接受 A1、A2、B1、B2，不加入 C1/C2。`normalized_key` 是非空、trim 後小寫的穩定字詞 identity。相同 `source_dataset`、`source_version`、`cefr_level`、`normalized_key` 與 `part_of_speech`（含缺值）不得重複。來源、版本與 `provenance` 保留可追溯性；ReLai 自有的中文釋義、英語例句、繁中例句翻譯及愛爾蘭用法可以為 null。此 schema 不匯入目錄資料，也不建立 starter cards。
+
+## `user_vocabulary_items`
+
+```text
+id TEXT PK
+user_id TEXT NOT NULL
+headword TEXT NOT NULL
+normalized_key TEXT NOT NULL
+part_of_speech TEXT
+zh_tw_definition TEXT
+english_example TEXT
+zh_tw_example_translation TEXT
+irish_usage TEXT
+source TEXT
+created_at TEXT NOT NULL
+updated_at TEXT NOT NULL
+```
+
+`user_vocabulary_items` is the future source for vocabulary captured from a
+user's own text or images. It is user-owned and unique by `(user_id,
+normalized_key)`. Shared catalog content remains exclusively in
+`vocabulary_catalog`.
 
 ## `user_settings`
 
@@ -879,6 +909,9 @@ POST   /cards/:id/favorite
 ```
 
 `needs_review` 僅接受 `true`：從未複習或距離上次複習超過七天；省略表示不套用此篩選，`false` 與其他值回傳 400。PATCH 僅接受卡片類型適用的學習內容；Error Log 的錯誤類型透過既有 `part_of_speech` 欄位編輯。身分、卡片類型、目錄／來源連結、系統中繼資料與複習時間不可編輯。沒有手動建立卡片端點。
+
+Catalog-backed vocabulary content is read-only; card updates cannot change its
+canonical text. Error Log content remains editable and user-owned.
 
 ## Reviews
 
@@ -1368,7 +1401,7 @@ wrangler.jsonc
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` 與 `0003_add_cefr_j_vocabulary_foundation.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
+兩個 D1 是不同資源，ID 僅記錄於伺服器端 `wrangler.jsonc`。預設環境是 staging，各命名環境皆明確設定綁定；本機開發使用模擬 D1。根目錄 `migrations/` 是唯一的 schema 來源，已提交 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` 與 `0003_add_cefr_j_vocabulary_foundation.sql` 與 `0004_normalize_vocabulary_ownership.sql`。遠端套用狀態需另外查核，migration 不會由 CI 或一般部署自動執行。
 
 `npm run dev`、`npm run build` 及 `npm run deploy` 選擇 staging。Production 從 `main` 走受保護的手動發布流程；目前不可將 `npm run deploy:production` 視為已驗證的 production 部署指令，因為它在 production 建置後執行未指定設定檔的 `wrangler deploy`，而根目錄設定預設指向 staging。首次 production 發布前，須另行驗證產生的設定檔、Worker／D1 綁定與確切部署指令，並取得發布授權。環境在 Vite **建置時**選定。儲存庫核准的自動化 staging 部署負責者是 Cloudflare Workers Builds；GitHub Actions 只做 PR 品質檢查。Cloudflare Dashboard 的即時 Git 連線與部署狀態須在 Dashboard 查核，不能由儲存庫推定。詳見 [D1 環境](docs/d1-environments.md)及 [develop 部署手冊](docs/develop-deployment.md)。
 
