@@ -47,7 +47,7 @@ describe('migrated client under /relaiapp', () => {
       field.dispatchEvent(new Event('input', { bubbles: true }))
     })
   }
-  it.each(['change-password', 'home', 'cards', 'flashcards', 'error-log', 'stats', 'settings'])('redirects unauthenticated %s, including aliases', async path => {
+  it.each(['change-password', 'home', 'cards', 'cards/vocab-1', 'vocabulary', 'capture', 'flashcards', 'error-log', 'stats', 'settings'])('redirects unauthenticated %s, including aliases', async path => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }))
     await renderAt(`/relaiapp/${path}`)
     expect(window.location.pathname).toBe('/relaiapp/login')
@@ -55,7 +55,7 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).not.toContain('serendipity')
     expect(fetch).toHaveBeenCalledTimes(1)
   })
-  it.each(['home', 'cards', 'flashcards', 'error-log', 'stats', 'settings'])('forces a temporary-password account away from %s', async path => {
+  it.each(['home', 'cards', 'cards/vocab-1', 'vocabulary', 'capture', 'flashcards', 'error-log', 'stats', 'settings'])('forces a temporary-password account away from %s', async path => {
     vi.mocked(fetch).mockResolvedValue(Response.json({ user: { ...user, must_change_password: true } }))
     await renderAt(`/relaiapp/${path}`)
     expect(window.location.pathname).toBe('/relaiapp/change-password')
@@ -304,13 +304,14 @@ describe('migrated client under /relaiapp', () => {
     expect(container.querySelector('a')?.getAttribute('href')).toBe('/relaiapp/login')
   })
   it.each([
-    ['login', '登入你的帳號'], ['home', '今日進度'], ['cards', 'serendipity'],
+    ['login', '登入你的帳號'], ['home', '今日進度'], ['cards', 'serendipity'], ['cards/vocab-1', 'serendipity'],
     ['flashcards', 'serendipity'], ['error-log', '錯誤筆記'],
+    ['vocabulary', '我的單字'], ['capture', 'AI 辨識'],
     ['stats', '學習統計'], ['settings', '設定'],
   ])('supports direct navigation to %s', async (path, content) => {
     await renderAt(`/relaiapp/${path}`)
     expect(container.textContent).toContain(content)
-    if (['cards', 'flashcards', 'error-log'].includes(path)) {
+    if (['cards', 'cards/vocab-1', 'flashcards', 'error-log'].includes(path)) {
       expect(container.querySelector('[data-source="api"]')).not.toBeNull()
       expect(fetch).toHaveBeenCalledWith('/relaiapp/api/v1/auth/me', expect.objectContaining({ credentials: 'same-origin' }))
     }
@@ -356,8 +357,9 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain('單字卡複習')
     await click(container.querySelector('a[aria-label="返回首頁"]'))
     expect(container.querySelector('nav [aria-current="page"]')?.textContent).toBe('首頁')
-    await click(container.querySelector('nav a[href="/relaiapp/error-log"]'))
-    expect(container.textContent).toContain('錯誤筆記')
+    await click(container.querySelector('nav a[href="/relaiapp/capture"]'))
+    expect(window.location.pathname).toBe('/relaiapp/capture')
+    expect(container.textContent).toContain('AI 辨識')
     await act(() => {
       window.history.replaceState(null, '', '/relaiapp/home')
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -392,6 +394,12 @@ describe('migrated client under /relaiapp', () => {
     expect(container.textContent).toContain("I didn't went to the meeting yesterday.")
     expect(container.textContent).toContain("I didn't go to the meeting yesterday.")
     expect(container.textContent).toContain('didn\'t 後方需接動詞原形')
+  })
+  it('does not show a different card when an exact card link is missing', async () => {
+    await renderAt('/relaiapp/cards/deleted-card')
+    expect(container.textContent).toContain('找不到這張單字卡')
+    expect(container.textContent).not.toContain('serendipity')
+    expect(container.querySelector('a[href="/relaiapp/vocabulary"]')).not.toBeNull()
   })
   it.each(['/auth?mode=register', '/login?mode=register'])('never exposes registration via legacy query %s', async path => {
     await renderAt(`/relaiapp${path}`)

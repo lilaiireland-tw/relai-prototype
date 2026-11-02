@@ -25,6 +25,7 @@ export function productServer() {
     card_type: 'vocabulary', front_content: item.headword,
     back_content: `${item.zh_tw_definition}\n${item.english_example}\n${item.zh_tw_example_translation}`,
     part_of_speech: item.part_of_speech, zh_tw_definition: item.zh_tw_definition,
+    english_example: item.english_example, zh_tw_example_translation: item.zh_tw_example_translation,
     explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
     last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
    })

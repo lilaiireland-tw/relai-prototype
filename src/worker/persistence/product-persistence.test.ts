@@ -70,6 +70,20 @@ describe('product persistence with local SQLite D1 transport', () => {
     expect(await repos.flashcards.find('two', 'b')).not.toBeNull()
   })
 
+  it('projects vocabulary examples separately while leaving Error Log fields empty', async () => {
+    addCard('vocab', 'one')
+    sqlite.prepare(`UPDATE user_vocabulary_items SET zh_tw_definition = ?, english_example = ?,
+      zh_tw_example_translation = ? WHERE id = ?`)
+      .run('好奇的', 'She was curious.', '她很好奇。', 'item-vocab')
+    expect(await repos.flashcards.find('one', 'vocab')).toMatchObject({
+      zh_tw_definition: '好奇的', english_example: 'She was curious.', zh_tw_example_translation: '她很好奇。',
+    })
+    addCard('error', 'one', at, 'error_log')
+    expect(await repos.flashcards.find('one', 'error')).toMatchObject({
+      english_example: null, zh_tw_example_translation: null,
+    })
+  })
+
   it('filters type, favorite and seven-day needs-review and bounds cursor pages', async () => {
     addCard('a', 'one'); addCard('b', 'one', at, 'error_log'); addCard('c', 'one', old); addCard('d', 'two')
     sqlite.prepare('UPDATE flashcards SET is_favorite = ?, last_reviewed_at = ? WHERE id = ?')

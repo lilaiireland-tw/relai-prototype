@@ -63,6 +63,8 @@ export interface FlashcardRow {
   back_content: string
   part_of_speech: string | null
   zh_tw_definition: string | null
+  english_example: string | null
+  zh_tw_example_translation: string | null
   explanation: string | null
   irish_usage: string | null
   source: string | null

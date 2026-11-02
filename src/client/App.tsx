@@ -6,6 +6,8 @@ import Login from './pages/Login'
 import Home from './pages/Home'
 import Flashcards from './pages/Flashcards'
 import ErrorLog from './pages/ErrorLog'
+import VocabularyList from './pages/VocabularyList'
+import Capture from './pages/Capture'
 import Stats from './pages/Stats'
 import Settings from './pages/Settings'
 import Onboarding from './pages/Onboarding'
@@ -31,6 +33,9 @@ export function App() {
     <Route element={<RequireLevel />}>
     <Route path="home" element={<Home />} />
     <Route path="cards" element={<Flashcards />} />
+    <Route path="cards/:cardId" element={<Flashcards />} />
+    <Route path="vocabulary" element={<VocabularyList />} />
+    <Route path="capture" element={<Capture />} />
     <Route path="flashcards" element={<Navigate to="/cards" replace />} />
     <Route path="error-log" element={<ErrorLog />} />
     <Route path="stats" element={<Stats />} />

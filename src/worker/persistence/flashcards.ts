@@ -14,6 +14,10 @@ const columns = `card.id, card.user_id, card.source_item_id, card.card_type,
     ELSE COALESCE(catalog.part_of_speech, personal.part_of_speech) END AS part_of_speech,
   CASE WHEN card.card_type = 'error_log' THEN card.zh_tw_definition
     ELSE COALESCE(catalog.zh_tw_definition, personal.zh_tw_definition) END AS zh_tw_definition,
+  CASE WHEN card.card_type = 'error_log' THEN NULL
+    ELSE COALESCE(catalog.english_example, personal.english_example) END AS english_example,
+  CASE WHEN card.card_type = 'error_log' THEN NULL
+    ELSE COALESCE(catalog.zh_tw_example_translation, personal.zh_tw_example_translation) END AS zh_tw_example_translation,
   card.explanation,
   CASE WHEN card.card_type = 'error_log' THEN card.irish_usage
     ELSE COALESCE(catalog.irish_usage, personal.irish_usage) END AS irish_usage,

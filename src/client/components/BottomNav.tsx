@@ -1,12 +1,12 @@
 import { NavLink, useLocation } from "react-router";
-import { BookOpen, Home, Languages, LogOut } from "lucide-react";
+import { BookOpen, Camera, Home, LogOut } from "lucide-react";
 
 import { useAuthSession } from "./AuthSession";
 
 const tabs = [
   { key: "home", label: "首頁", href: "/home", icon: Home },
   { key: "cards", label: "單字卡", href: "/cards", icon: BookOpen },
-  { key: "errors", label: "錯誤卡", href: "/error-log", icon: Languages },
+  { key: "capture", label: "AI 辨識", href: "/capture", icon: Camera },
 ];
 
 export default function BottomNav() {
