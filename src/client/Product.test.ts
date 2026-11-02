@@ -213,6 +213,10 @@ describe('Phase 4 authenticated product UI', () => {
   await click(container.querySelector('a[href="/relaiapp/vocabulary"]')!)
   expect(window.location.pathname).toBe('/relaiapp/vocabulary')
   expect(['serendipity', 'grand', 'procrastinate', 'craic'].every(word => container.textContent?.includes(word))).toBe(true)
+  const grandRow = container.querySelector<HTMLAnchorElement>('main a[href="/relaiapp/cards/vocab-2"]')!
+  expect(grandRow.textContent).toContain('adj.')
+  expect(grandRow.textContent).toContain('很好、沒問題（口語，常見於愛爾蘭英語）')
+  expect(grandRow.querySelector('.line-clamp-2')).not.toBeNull()
   expect(requests('/cards').some(([url]) => new URL(String(url), 'https://example.test').searchParams.get('card_type') === 'vocabulary')).toBe(true)
   await click(button('收藏'))
   expect(container.querySelectorAll('main a[href^="/relaiapp/cards/"]')).toHaveLength(1)

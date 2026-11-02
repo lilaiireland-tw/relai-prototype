@@ -26,7 +26,7 @@ export default function VocabularyList() {
    <DataState loading={loading} error={error} retry={reload} />
    <div className="mt-4 flex flex-col gap-2">
     {cards.map(card => <Link key={card.id} to={`/cards/${encodeURIComponent(card.id)}`} className="flex min-h-16 items-center justify-between gap-3 rounded-xl border border-gray-100 bg-card-gray px-4 py-3 hover:bg-gray-100">
-     <span className="min-w-0"><span className="block truncate font-semibold text-text-primary">{card.front_content}</span><span className="mt-0.5 block text-sm text-text-secondary">{card.part_of_speech}</span></span>
+     <span className="min-w-0"><span className="block truncate font-semibold text-text-primary">{card.front_content}</span><span className="mt-0.5 block text-sm text-text-secondary">{card.part_of_speech}</span><span className="mt-1 block line-clamp-2 break-words text-sm leading-relaxed text-text-primary">{card.zh_tw_definition}</span></span>
      {card.is_favorite && <Star aria-label="已收藏" size={18} className="shrink-0 fill-irish-green text-irish-green" />}
     </Link>)}
     {!loading && !error && cards.length === 0 && <p className="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-text-secondary">{favoritesOnly ? '目前沒有收藏的單字。' : '目前沒有單字卡。'}</p>}
