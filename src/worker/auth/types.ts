@@ -10,6 +10,6 @@ export interface SafeUser {
 
 /** Server-only binding subset. No auth material belongs in shared/client types. */
 export type AuthEnv = {
-  Bindings: { DB: PersistenceDatabase; AUTH_PEPPER: string }
+  Bindings: { DB: PersistenceDatabase; AUTH_PEPPER: string; GEMINI_API_KEY?: string; GEMINI_MODEL?: string }
   Variables: { user: SafeUser }
 }

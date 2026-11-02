@@ -135,6 +135,46 @@ describe('Phase 4 authenticated product UI', () => {
   expect(container.textContent).toContain('今日進度')
   expect(requests('/onboarding/level')).toHaveLength(1)
  })
+
+ it('extracts a picture preview, saves only checked words, and reloads the new flashcard', async () => {
+  await renderAt('cards')
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
+  const file = new File([new Uint8Array([137, 80, 78, 71])], 'lesson.png', { type: 'image/png' })
+  await act(() => {
+   Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+   input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await click(button('解析圖片'))
+  expect(container.textContent).toContain('She was curious about the old map.')
+  const checked = container.querySelector<HTMLInputElement>('input[aria-label="選取 map"]')!
+  await click(checked)
+  const cardsBefore = requests('/cards').length
+  await click(button('儲存勾選單字'))
+  const uploadCall = requests('/vocabulary/image', 'POST')[0][1]!
+  expect(uploadCall.body).toBeInstanceOf(FormData)
+  expect(new Headers(uploadCall.headers).has('Content-Type')).toBe(false)
+  const saveCall = requests('/vocabulary/save', 'POST')[0][1]!
+  expect(JSON.parse(String(saveCall.body)).items.map((item: { headword: string }) => item.headword)).toEqual(['curious'])
+  expect(requests('/cards').length).toBeGreaterThan(cardsBefore)
+  expect(server.home.cards.some(card => card.front_content === 'curious')).toBe(true)
+  await refreshAt('cards')
+  expect(container.textContent).toContain('curious')
+ })
+ it('shows an explicit pending message for ambiguous catalog matches', async () => {
+  await renderAt('cards')
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
+  await act(() => {
+   Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'lesson.png', { type: 'image/png' })] })
+   input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await click(button('解析圖片'))
+  vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ results: [{
+   headword: 'curious', status: 'pending', reason: 'catalog_ambiguous', catalog_definition: '好奇的',
+  }] }))
+  await click(button('儲存勾選單字'))
+  expect(container.textContent).toContain('目錄有多筆內容不同的同詞性項目')
+  expect(container.textContent).toContain('尚未建立卡片')
+ })
  it('keeps onboarding available after catalog failure and retries the same selected level', async () => {
   server.home.settings.english_level = null
   vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ user: { id: 'owner', username: 'Alex', display_name: 'Alex', role: 'user', must_change_password: false } }))

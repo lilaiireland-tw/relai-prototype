@@ -26,6 +26,8 @@ export const clientData = {
  getSettings: apiClient.getSettings,
  updateSettings: apiClient.updateSettings,
  selectLevel: apiClient.selectLevel,
+ extractImageVocabulary: apiClient.extractImageVocabulary,
+ saveVocabulary: apiClient.saveVocabulary,
  updateCard: apiClient.updateCard,
  setFavorite: apiClient.setFavorite,
  deleteCard: apiClient.deleteCard,

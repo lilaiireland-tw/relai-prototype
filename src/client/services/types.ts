@@ -23,3 +23,12 @@ export type CardFilter = 'all' | 'vocabulary' | 'error_log' | 'favorites' | 'nee
 export type CardPatch = Partial<Pick<Flashcard, 'front_content' | 'back_content' |
  'part_of_speech' | 'zh_tw_definition' | 'explanation' | 'irish_usage'>>
 export interface ReviewInput { client_event_id: string; card_id: string; review_result: 'viewed' }
+export interface ImageVocabularySuggestion {
+ headword: string; part_of_speech: string; zh_tw_definition: string
+ english_example: string; zh_tw_example_translation: string
+}
+export interface VocabularySaveResult {
+ headword: string; status: 'saved' | 'already_saved' | 'pending'
+ reason?: 'definition_missing' | 'definition_mismatch' | 'content_incomplete' | 'catalog_ambiguous' | 'catalog_changed'
+ catalog_definition?: string | null
+}

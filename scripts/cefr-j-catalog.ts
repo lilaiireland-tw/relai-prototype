@@ -50,6 +50,23 @@ interface CatalogRow {
   provenance: string
 }
 
+export interface ReviewedDemoRow {
+  id: string
+  headword: string
+  part_of_speech: string
+  cefr_level: 'B1'
+  zh_tw_definition: string
+  english_example: string
+  zh_tw_example_translation: string
+  irish_usage: string | null
+}
+interface ExistingDemoRow extends CatalogRow {
+  zh_tw_definition: string | null
+  english_example: string | null
+  zh_tw_example_translation: string | null
+  irish_usage: string | null
+}
+
 export function normalizeKey(headword: string): string {
   return headword.trim().toLowerCase()
 }
@@ -147,4 +164,85 @@ export async function importCatalog(db: CatalogDatabase, source: unknown): Promi
     }
   }
   return { inserted: pending.length, skipped: rows.length - pending.length, rejected: 0 }
+}
+
+export async function importReviewedDemo(db: CatalogDatabase, source: unknown) {
+  if (!Array.isArray(source) || source.length !== 20) throw new Error('Reviewed demo fixture must contain exactly 20 rows.')
+  const rows = source as ReviewedDemoRow[]
+  const seen = new Set<string>()
+  for (const [index, row] of rows.entries()) {
+    if (typeof row !== 'object' || row === null || typeof row.id !== 'string' ||
+      typeof row.headword !== 'string' || typeof row.part_of_speech !== 'string' || row.cefr_level !== 'B1' ||
+      typeof row.zh_tw_definition !== 'string' || !row.zh_tw_definition.trim() ||
+      typeof row.english_example !== 'string' || !row.english_example.trim() ||
+      typeof row.zh_tw_example_translation !== 'string' || !row.zh_tw_example_translation.trim() ||
+      (row.irish_usage !== null && typeof row.irish_usage !== 'string')) {
+      throw new Error(`Invalid reviewed demo row ${index + 1}.`)
+    }
+    const normalized_key = normalizeKey(row.headword)
+    const identityKey = JSON.stringify([row.cefr_level, normalized_key, row.part_of_speech])
+    if (!normalized_key || seen.has(identityKey) ||
+      row.id !== stableId(DATASET, VERSION, identityKey)) {
+      throw new Error(`Invalid reviewed demo identity at row ${index + 1}.`)
+    }
+    seen.add(identityKey)
+  }
+
+  const existing = await db.prepare(`SELECT id, headword, normalized_key, part_of_speech, cefr_level,
+      source_dataset, source_version, provenance, zh_tw_definition, english_example,
+      zh_tw_example_translation, irish_usage FROM vocabulary_catalog
+      WHERE id IN (${rows.map(() => '?').join(', ')})`)
+    .bind(...rows.map(row => row.id)).all<ExistingDemoRow>()
+  if (!existing.success) throw new Error('Could not inspect reviewed demo catalog rows.')
+  const expected = new Map(rows.map(row => [row.id, row]))
+  for (const current of existing.results) {
+    const row = expected.get(current.id)!
+    if (current.headword !== row.headword || current.normalized_key !== normalizeKey(row.headword) ||
+      current.part_of_speech !== row.part_of_speech || current.cefr_level !== row.cefr_level ||
+      current.source_dataset !== DATASET || current.source_version !== VERSION || current.provenance !== PROVENANCE) {
+      throw new Error('Existing reviewed demo catalog identity differs; no enrichment was applied.')
+    }
+  }
+
+  const present = new Set(existing.results.map(row => row.id))
+  const previous = new Map(existing.results.map(row => [row.id, row]))
+  const needsEnrichment = (row: ReviewedDemoRow) => {
+    const current = previous.get(row.id)
+    return Boolean(current && [
+      [current.zh_tw_definition, row.zh_tw_definition], [current.english_example, row.english_example],
+      [current.zh_tw_example_translation, row.zh_tw_example_translation], [current.irish_usage, row.irish_usage],
+    ].some(([oldValue, newValue]) => !oldValue?.trim() && Boolean(newValue?.trim())))
+  }
+  const timestamp = new Date().toISOString()
+  const statements: CatalogStatement[] = rows.flatMap(row => [
+    db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, cefr_level,
+      source_dataset, source_version, provenance, zh_tw_definition, english_example,
+      zh_tw_example_translation, irish_usage, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'B1', ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
+      .bind(row.id, row.headword, normalizeKey(row.headword), row.part_of_speech,
+        DATASET, VERSION, PROVENANCE, row.zh_tw_definition, row.english_example,
+        row.zh_tw_example_translation, row.irish_usage, timestamp, timestamp),
+    db.prepare(`UPDATE vocabulary_catalog SET
+      zh_tw_definition = COALESCE(NULLIF(TRIM(zh_tw_definition), ''), ?),
+      english_example = COALESCE(NULLIF(TRIM(english_example), ''), ?),
+      zh_tw_example_translation = COALESCE(NULLIF(TRIM(zh_tw_example_translation), ''), ?),
+      irish_usage = COALESCE(NULLIF(TRIM(irish_usage), ''), ?), updated_at = ?
+      WHERE id = ? AND headword = ? AND normalized_key = ? AND part_of_speech = ?
+        AND cefr_level = 'B1' AND source_dataset = ? AND source_version = ? AND provenance = ?
+        AND (NULLIF(TRIM(zh_tw_definition), '') IS NULL OR NULLIF(TRIM(english_example), '') IS NULL
+          OR NULLIF(TRIM(zh_tw_example_translation), '') IS NULL
+          OR (? IS NOT NULL AND NULLIF(TRIM(irish_usage), '') IS NULL))`)
+      .bind(row.zh_tw_definition, row.english_example, row.zh_tw_example_translation,
+        row.irish_usage, timestamp, row.id, row.headword, normalizeKey(row.headword),
+        row.part_of_speech, DATASET, VERSION, PROVENANCE, row.irish_usage),
+  ])
+  const results = await db.batch(statements)
+  if (results.length !== statements.length || results.some(result => !result.success)) {
+    throw new Error('Reviewed demo enrichment batch failed; inspect catalog state before rerunning.')
+  }
+  return {
+    inserted: rows.filter(row => !present.has(row.id)).length,
+    enriched: rows.filter(needsEnrichment).length,
+    unchanged: rows.filter(row => present.has(row.id) && !needsEnrichment(row)).length,
+  }
 }
