@@ -22,22 +22,24 @@ for sense identity; unknown levels remain null.
 Image recognition first extracts the headword, part of speech, semantic sense,
 source context and confidence. The Worker queries matching published records
 before requesting lexical content. Complete matches are reused unchanged. For
-incomplete records, generation requests only missing fields; validation runs
-before publication or enrichment. Existing non-empty verified fields are
-written with missing-only updates and optimistic content-version checks.
+incomplete records, generation requests only missing fields. Strict schema and
+deterministic field checks run before publication or enrichment. Existing
+non-empty published fields are written with missing-only updates and optimistic
+content-version checks.
 
-New senses publish only after structured-output validation and confidence gates.
-Ambiguous, low-confidence or conflicting results are stored as private
-`review_needed` candidates. The authenticated administrator review API provides
-an explicit publish/reject path; incomplete candidates cannot be published.
+New senses publish after structured-output and deterministic field validation.
+Ambiguous or low-confidence senses return an explicit per-item status and
+published sense options for the user to resolve. The normal image flow does not
+create review candidates or wait for administrator approval; legacy candidates
+remain available through the existing admin API.
 
 Database uniqueness indexes enforce one published record per normalized
 headword/POS/sense and private candidate/catalog uniqueness per owner. D1 batch
 operations, conflict handling and optimistic content versions make retries
-idempotent and prevent competing requests from overwriting verified content.
+idempotent and prevent competing requests from overwriting published content.
 Card provenance retains the user's `source_item_id`; raw source context stays on
-the owned source item or private candidate and is not copied into a shared
-catalog record. Catalog provenance records model, prompt and validation metadata.
+the owned source item or legacy private candidate and is not copied into a shared
+catalog record. Catalog provenance records model, prompt and field-validation metadata.
 Accepted catalog content changes append immutable version snapshots.
 
 Migration 0005 archives old catalog source rows and retains their IDs and source
@@ -50,7 +52,8 @@ D1; staging application is an explicit operator procedure.
 
 - Users selecting the same canonical sense read content from the same catalog row.
 - Distinct senses and parts of speech remain separate and may have separate cards.
-- Catalog candidates need administrator resolution before learners can save them.
+- Legacy catalog candidates need administrator resolution; normal image capture
+  publishes eligible items and lets users choose when a published sense is ambiguous.
 - CEFR-J source rows remain queryable in the archived source table; their
   canonical mappings do not invent semantic sense labels or CEFR levels.
 - Migration and Worker rollout require coordination because the new flashcard

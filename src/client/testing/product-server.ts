@@ -20,20 +20,25 @@ export function productServer() {
   })
   if (path.pathname.endsWith('/vocabulary/save')) {
    const selected = body.items as { headword: string; part_of_speech: string }[]
+   const cards: Flashcard[] = []
+   const results: { headword: string; status: 'saved'; card_id: string }[] = []
    for (const [index, item] of selected.entries()) {
     const content = item.headword === 'curious'
      ? { zh_tw_definition: '好奇的', english_example: 'She was curious about the old map.', zh_tw_example_translation: '她對那張舊地圖感到好奇。' }
      : { zh_tw_definition: '地圖', english_example: 'The map showed the river.', zh_tw_example_translation: '地圖標示了那條河。' }
-    home.cards.unshift({
-    id: `saved-${home.cards.length}-${index}`, user_id: 'owner', source_item_id: body.source_item_id,
+    const card: Flashcard = {
+    id: `00000000-0000-4000-8000-${String(home.cards.length + index + 1).padStart(12, '0')}`, user_id: 'owner', source_item_id: body.source_item_id,
     card_type: 'vocabulary', front_content: item.headword,
     back_content: `${content.zh_tw_definition}\n${content.english_example}\n${content.zh_tw_example_translation}`,
     part_of_speech: item.part_of_speech, ...content,
     explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
     last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-   })
+    }
+    cards.push(card)
+    home.cards.unshift(card)
+    results.push({ headword: item.headword, status: 'saved', card_id: card.id })
    }
-   return Response.json({ results: selected.map(item => ({ headword: item.headword, status: 'saved' })) })
+   return Response.json({ results, cards })
   }
   if (path.pathname.endsWith('/settings')) {
    if (init?.method === 'PATCH') Object.assign(home.settings, body as Settings)

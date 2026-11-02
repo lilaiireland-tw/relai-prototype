@@ -2,9 +2,10 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AuthEnv } from '../auth/types'
 import { requireAuth, requirePasswordChanged } from '../middleware/auth'
+import { createRepositories } from '../persistence'
 import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary } from '../persistence/vocabulary'
 import { extractVocabularyFromImage, isImageCapableGeminiModel, vocabularySuggestionSchema } from '../services/vocabulary-image'
-import { prepareVocabulary, VocabularyAiError } from '../services/vocabulary-catalog'
+import { normalizeHeadword, normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_MULTIPART_BYTES = MAX_IMAGE_BYTES + 64 * 1024
@@ -13,6 +14,7 @@ const selectionSchema = z.strictObject({
   part_of_speech: z.string().trim().min(1).max(40),
   semantic_sense: z.string().trim().min(1).max(160),
   source_context: z.string().trim().min(1).max(500),
+  resolve_sense: z.boolean().optional(),
 })
 const extractionSchema = z.strictObject({ version: z.literal(1), suggestions: z.array(vocabularySuggestionSchema).max(10) })
 const saveInput = z.strictObject({
@@ -129,25 +131,34 @@ vocabulary.post('/save', async c => {
   const bySelection = new Map(extraction.suggestions.map(item => [JSON.stringify([
     item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
   ]), item]))
-  const items = input.data.items.map(item => bySelection.get(JSON.stringify([
-    item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
-  ])))
+  const byContext = new Map<string, z.infer<typeof vocabularySuggestionSchema>[]>()
+  for (const item of extraction.suggestions) {
+    const key = JSON.stringify([item.headword, item.part_of_speech, item.source_context])
+    byContext.set(key, [...(byContext.get(key) ?? []), item])
+  }
+  const items = await Promise.all(input.data.items.map(async item => {
+    const exact = bySelection.get(JSON.stringify([
+      item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
+    ]))
+    if (!item.resolve_sense) return exact
+    const matches = byContext.get(JSON.stringify([item.headword, item.part_of_speech, item.source_context]))
+    if (matches?.length !== 1) return undefined
+    const canonical = await c.env.DB.prepare(`SELECT id FROM vocabulary_catalog WHERE normalized_key = ?
+      AND part_of_speech_key = ? AND sense_key = ? AND publication_status = 'published'`)
+      .bind(normalizeHeadword(item.headword), item.part_of_speech, normalizeSense(item.semantic_sense))
+      .first<{ id: string }>()
+    return canonical ? { ...(exact ?? matches[0]), semantic_sense: item.semantic_sense, confidence: 1 } : undefined
+  }))
   if (items.some(item => !item)) {
     return c.json({ error: { code: 'INVALID_INPUT', message: 'Select words from this image extraction.' } }, 400)
   }
-  try {
-    const plans = await prepareVocabulary(c.env.DB, userId, source.id, items as z.infer<typeof vocabularySuggestionSchema>[],
-      c.env, source.ai_model ?? 'unknown')
-    const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
-    return c.json({ results })
-  } catch (error) {
-    if (error instanceof VocabularyAiError) {
-      return error.unavailable
-        ? c.json({ error: { code: 'GEMINI_UNAVAILABLE', message: 'Vocabulary validation is unavailable.' } }, 503)
-        : c.json({ error: { code: 'ENRICHMENT_FAILED', message: 'Vocabulary content could not be validated.' } }, 502)
-    }
-    throw error
-  }
+  const plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
+    c.env, source.ai_model ?? 'unknown')
+  const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
+  const flashcards = createRepositories(c.env.DB).flashcards
+  const cards = await Promise.all(results.flatMap(result => 'card_id' in result
+    ? [flashcards.find(userId, result.card_id)] : []))
+  return c.json({ results, cards: cards.filter(card => card !== null) })
 })
 
 vocabulary.get('/review', async c => {

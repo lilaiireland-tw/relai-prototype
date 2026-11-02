@@ -179,8 +179,12 @@ describe('authenticated canonical image vocabulary', () => {
     vi.stubGlobal('fetch', gemini)
     const first = await save(ownerCookie, ownerSource, [selection(suggestion)])
     const second = await save(otherCookie, otherSource, [selection(suggestion)])
-    expect(await first.json()).toEqual({ results: [{ headword: 'curious', status: 'saved' }] })
-    expect(await second.json()).toEqual({ results: [{ headword: 'curious', status: 'saved' }] })
+    const firstResult = await first.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
+    const secondResult = await second.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
+    expect(firstResult.results[0]).toMatchObject({ status: 'saved', card_id: expect.any(String) })
+    expect(firstResult.cards[0]).toMatchObject({ id: firstResult.results[0].card_id, source_item_id: ownerSource })
+    expect(secondResult.results[0].status).toBe('saved')
+    expect(secondResult.cards).toHaveLength(1)
     expect(gemini).not.toHaveBeenCalled()
     expect(sqlite.prepare('SELECT user_id, vocabulary_catalog_id FROM flashcards ORDER BY user_id').all())
       .toEqual([{ user_id: 'other', vocabulary_catalog_id: canonical }, { user_id: 'owner', vocabulary_catalog_id: canonical }])
@@ -198,11 +202,10 @@ describe('authenticated canonical image vocabulary', () => {
       .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 0,
         english_example: completeContent.english_example,
         zh_tw_example_translation: completeContent.zh_tw_example_translation }] }))
-      .mockResolvedValueOnce(modelOutput({ version: 1, results: [{ item_index: 0, valid: true, confidence: 0.99, reason: 'Matches source sense.' }] }))
     vi.stubGlobal('fetch', gemini)
     const response = await save(cookie, sourceId, [selection(suggestion)])
-    expect(await response.json()).toEqual({ results: [{ headword: 'curious', status: 'saved' }] })
-    expect(gemini).toHaveBeenCalledTimes(2)
+    expect((await response.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
+    expect(gemini).toHaveBeenCalledTimes(1)
     const request = JSON.parse(String(gemini.mock.calls[0][1]?.body)) as { input: string }
     expect(request.input).toContain('"missing":["english_example","zh_tw_example_translation"]')
     expect(request.input).toContain('既有且已驗證的定義')
@@ -212,16 +215,18 @@ describe('authenticated canonical image vocabulary', () => {
         content_version: 2 })
     expect(sqlite.prepare('SELECT version FROM vocabulary_catalog_versions WHERE catalog_id = ? ORDER BY version').all(canonical))
       .toEqual([{ version: 1 }, { version: 2 }])
+    const provenance = JSON.parse(String((sqlite.prepare('SELECT provenance FROM vocabulary_catalog WHERE id = ?').get(canonical) as { provenance: string }).provenance))
+    expect(provenance).toMatchObject({ previous: 'fixture', enrichment: { field_validation: 'passed' } })
   })
 
   it('creates a new published sense without inventing a CEFR level', async () => {
     const cookie = await session('owner')
     const sourceId = await sourceItem('owner')
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 0, ...completeContent }] }))
-      .mockResolvedValueOnce(modelOutput({ version: 1, results: [{ item_index: 0, valid: true, confidence: 0.99, reason: 'Valid.' }] })))
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
+      modelOutput({ version: 1, items: [{ item_index: 0, ...completeContent }] })))
     const response = await save(cookie, sourceId, [selection(suggestion)])
-    expect(await response.json()).toEqual({ results: [{ headword: 'curious', status: 'saved' }] })
+    const result = await response.json() as { results: { status: string; card_id: string }[]; cards: { id: string }[] }
+    expect(result.results[0]).toMatchObject({ status: 'saved', card_id: result.cards[0].id })
     const catalog = sqlite.prepare(`SELECT id, cefr_level, publication_status, content_version, source_dataset,
       provenance
       FROM vocabulary_catalog WHERE normalized_key = 'curious'`).get() as Record<string, unknown>
@@ -232,6 +237,8 @@ describe('authenticated canonical image vocabulary', () => {
       .toEqual([{ catalog_id: catalog.id, version: 1 }])
     expect(sqlite.prepare('SELECT vocabulary_catalog_id FROM flashcards WHERE user_id = ?').get('owner'))
       .toEqual({ vocabulary_catalog_id: catalog.id })
+    expect(sqlite.prepare('SELECT source_item_id FROM flashcards WHERE user_id = ?').get('owner'))
+      .toEqual({ source_item_id: sourceId })
   })
 
   it('keeps two senses of bank as separate canonical IDs', async () => {
@@ -247,10 +254,7 @@ describe('authenticated canonical image vocabulary', () => {
       zh_tw_definition: item.semantic_sense, english_example: item.source_context,
       zh_tw_example_translation: `翻譯 ${item_index}` }))
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(modelOutput({ version: 1, items: generated }))
-      .mockResolvedValueOnce(modelOutput({ version: 1, results: bankSenses.map((_, item_index) => ({
-        item_index, valid: true, confidence: 0.99, reason: 'Matches source context.',
-      })) })))
+      .mockResolvedValueOnce(modelOutput({ version: 1, items: generated })))
     const response = await save(cookie, sourceId, bankSenses.map(selection))
     expect((await response.json() as { results: { status: string }[] }).results.map(row => row.status))
       .toEqual(['saved', 'saved'])
@@ -271,7 +275,7 @@ describe('authenticated canonical image vocabulary', () => {
       const request = JSON.parse(String(init?.body)) as { input: string }
       return request.input.startsWith('Generate only')
         ? modelOutput({ version: 1, items: [{ item_index: 0, ...completeContent }] })
-        : modelOutput({ version: 1, results: [{ item_index: 0, valid: true, confidence: 0.99, reason: 'Valid.' }] })
+        : modelOutput({ version: 1, matches: [{ item_index: 0, action: 'new', candidate_index: null, confidence: 0.99 }] })
     })
     vi.stubGlobal('fetch', gemini)
     const [first, concurrent] = await Promise.all([
@@ -282,50 +286,60 @@ describe('authenticated canonical image vocabulary', () => {
     const ids = sqlite.prepare('SELECT DISTINCT vocabulary_catalog_id FROM flashcards ORDER BY vocabulary_catalog_id').all() as { vocabulary_catalog_id: string }[]
     expect(ids).toHaveLength(1)
     const retry = await save(ownerCookie, ownerSource, [selection(suggestion)])
-    expect(await retry.json()).toEqual({ results: [{ headword: 'curious', status: 'already_saved' }] })
+    expect((await retry.json() as { results: { status: string }[] }).results[0].status).toBe('already_saved')
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_stats WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
-    expect(gemini).toHaveBeenCalledTimes(4)
+    expect(gemini).toHaveBeenCalledTimes(2)
   })
 
-  it('saves a review candidate privately and gives administrators a real publish path', async () => {
+  it('returns ambiguous senses for user resolution without blocking eligible words', async () => {
     const ownerCookie = await session('owner')
-    const adminCookie = await session('admin', 'admin')
-    const sourceId = await sourceItem('owner', [{ ...suggestion, confidence: 0.5 }])
-    const first = await save(ownerCookie, sourceId, [selection({ ...suggestion, confidence: 0.5 })])
-    const result = await first.json() as { results: { status: string; candidate_id: string }[] }
-    expect(result.results[0]).toMatchObject({ headword: 'curious', status: 'review_needed', candidate_id: expect.any(String) })
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
-    const retry = await save(ownerCookie, sourceId, [selection({ ...suggestion, confidence: 0.5 })])
-    expect(await retry.json()).toEqual({ results: [result.results[0]] })
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog_candidates').get()).toEqual({ count: 1 })
-    expect((await app.request('https://example.test/relaiapp/api/v1/vocabulary/review', {
-      headers: { Cookie: ownerCookie },
-    }, { DB: db, AUTH_PEPPER: 'synthetic' })).status).toBe(403)
-    const queue = await app.request('https://example.test/relaiapp/api/v1/vocabulary/review', {
-      headers: { Cookie: adminCookie },
-    }, { DB: db, AUTH_PEPPER: 'synthetic' })
-    expect((await queue.json() as { candidates: { id: string }[] }).candidates.map(row => row.id)).toEqual([result.results[0].candidate_id])
-    const published = await app.request(`https://example.test/relaiapp/api/v1/vocabulary/review/${result.results[0].candidate_id}`, {
-      method: 'POST', headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'publish', semantic_sense: 'eager to know', ...completeContent }),
-    }, { DB: db, AUTH_PEPPER: 'synthetic' })
-    expect(await published.json()).toMatchObject({ status: 'published', catalog_id: expect.any(String) })
-    expect((await save(ownerCookie, sourceId, [selection(suggestion)])).status).toBe(200)
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
+    const bank: VocabularySuggestion = { ...suggestion, headword: 'bank', part_of_speech: 'noun',
+      semantic_sense: 'a place beside a river', source_context: 'They sat on the bank beside the river.' }
+    const other: VocabularySuggestion = { ...bank, headword: 'curious', part_of_speech: 'adjective',
+      semantic_sense: 'eager to know or learn', source_context: suggestion.source_context }
+    const sourceId = await sourceItem('owner', [bank, other])
+    const financialId = addCatalog({ ...bank, semantic_sense: 'financial institution' }, completeContent, 'bank-financial')
+    const riverId = addCatalog({ ...bank, semantic_sense: 'land beside a river' }, completeContent, 'bank-river')
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(modelOutput({ version: 1, matches: [{ item_index: 0, action: 'ambiguous', candidate_index: null, confidence: 0.55 }] }))
+      .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 1, ...completeContent }] })))
+    const first = await save(ownerCookie, sourceId, [selection(bank), selection(other)])
+    const result = await first.json() as { results: { status: string; options?: { catalog_id: string; semantic_sense: string }[] }[]; cards: { id: string }[] }
+    expect(result.results.map(item => item.status)).toEqual(['ambiguous', 'saved'])
+    expect(result.results[0].options).toEqual([
+      { catalog_id: financialId, semantic_sense: 'financial institution' },
+      { catalog_id: riverId, semantic_sense: 'land beside a river' },
+    ])
+    expect(result.cards).toHaveLength(1)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog_candidates').get()).toEqual({ count: 0 })
+
+    const chosen = result.results[0].options![1]
+    const resolved = await save(ownerCookie, sourceId, [{ ...selection(bank), semantic_sense: chosen.semantic_sense, resolve_sense: true }])
+    const resolvedResult = await resolved.json() as { results: { status: string; card_id: string }[]; cards: { id: string }[] }
+    expect(resolvedResult.results[0]).toMatchObject({ status: 'saved', card_id: resolvedResult.cards[0].id })
+    expect(sqlite.prepare('SELECT vocabulary_catalog_id FROM flashcards WHERE id = ?').get(resolvedResult.results[0].card_id))
+      .toEqual({ vocabulary_catalog_id: riverId })
   })
 
-  it('does not save or publish malformed enrichment output', async () => {
+  it('saves valid words when one generated item fails deterministic field validation', async () => {
     const cookie = await session('owner')
-    const sourceId = await sourceItem('owner')
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-      status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: '{bad json' }] }],
-    })))
-    const response = await save(cookie, sourceId, [selection(suggestion)])
-    expect(response.status).toBe(502)
+    const second: VocabularySuggestion = { ...suggestion, headword: 'map', part_of_speech: 'noun',
+      semantic_sense: 'a representation of an area', source_context: 'The map showed the river.' }
+    const sourceId = await sourceItem('owner', [suggestion, second])
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(modelOutput({ version: 1, items: [
+      { item_index: 0, ...completeContent },
+      { item_index: 1, zh_tw_definition: '地圖', unexpected: 'reject this field' },
+    ] })))
+    const response = await save(cookie, sourceId, [selection(suggestion), selection(second)])
+    expect(response.status).toBe(200)
+    expect((await response.json() as { results: { status: string; reason?: string }[] }).results)
+      .toMatchObject([{ status: 'saved' }, { status: 'not_saved', reason: 'invalid_content' }])
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog WHERE normalized_key = ?').get('curious'))
+      .toEqual({ count: 1 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog WHERE normalized_key = ?').get('map'))
       .toEqual({ count: 0 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog_candidates').get()).toEqual({ count: 0 })
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 1 })
   })
 })

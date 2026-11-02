@@ -85,7 +85,7 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
       return getJson('/vocabulary/image', value => vocabularyImageResponse.parse(value), form, 'POST', 60_000)
     },
     saveVocabulary(source_item_id: string, items: ImageVocabularySelection[]) {
-      return getJson('/vocabulary/save', value => vocabularySaveResponse.parse(value), { source_item_id, items })
+      return getJson('/vocabulary/save', value => vocabularySaveResponse.parse(value), { source_item_id, items }, 'POST', 120_000)
     },
     getSettings() { return getJson('/settings', value => settingsResponse.parse(value).settings) },
     updateSettings(input: Partial<Settings>) {

@@ -31,9 +31,16 @@ const vocabularySuggestionSchema = z.strictObject({
 export const vocabularyImageResponse = z.strictObject({
  contract_version: z.literal(1), source_item_id: z.string().uuid(), suggestions: z.array(vocabularySuggestionSchema).max(10),
 })
-const vocabularyReviewReason = z.enum(['ambiguous_sense', 'low_confidence', 'validation_failed', 'catalog_conflict', 'catalog_changed'])
-export const vocabularySaveResponse = z.strictObject({ results: z.array(z.discriminatedUnion('status', [
- z.strictObject({ headword: z.string(), status: z.literal('saved') }),
- z.strictObject({ headword: z.string(), status: z.literal('already_saved') }),
- z.strictObject({ headword: z.string(), status: z.literal('review_needed'), candidate_id: z.string().min(1), reason: vocabularyReviewReason }),
-])) })
+const ambiguousSenseReason = z.enum(['ambiguous_sense', 'low_confidence'])
+const notSavedReason = z.enum(['invalid_content', 'enrichment_unavailable', 'catalog_changed', 'save_failed'])
+const vocabularyOption = z.strictObject({ catalog_id: z.string().min(1), semantic_sense: z.string().min(1) })
+export const vocabularySaveResponse = z.strictObject({
+ results: z.array(z.discriminatedUnion('status', [
+  z.strictObject({ headword: z.string(), status: z.literal('saved'), card_id: z.string().uuid() }),
+  z.strictObject({ headword: z.string(), status: z.literal('already_saved'), card_id: z.string().uuid() }),
+  z.strictObject({ headword: z.string(), status: z.literal('ambiguous'), reason: ambiguousSenseReason,
+   item: vocabularySuggestionSchema, options: z.array(vocabularyOption) }),
+  z.strictObject({ headword: z.string(), status: z.literal('not_saved'), reason: notSavedReason }),
+ ])),
+ cards: z.array(cardSchema),
+})

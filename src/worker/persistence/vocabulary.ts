@@ -5,9 +5,18 @@ type MaybeLexicalContent = Record<LexicalField, string | null | undefined>
 
 export type VocabularySaveResult = {
   headword: string
-  status: 'saved' | 'already_saved' | 'review_needed'
-  candidate_id?: string
-  reason?: 'ambiguous_sense' | 'low_confidence' | 'validation_failed' | 'catalog_conflict' | 'catalog_changed'
+  status: 'saved' | 'already_saved'
+  card_id: string
+} | {
+  headword: string
+  status: 'ambiguous'
+  reason: 'ambiguous_sense' | 'low_confidence'
+  item: VocabularyPlan['item']
+  options: { catalog_id: string; semantic_sense: string }[]
+} | {
+  headword: string
+  status: 'not_saved'
+  reason: 'invalid_content' | 'enrichment_unavailable' | 'catalog_changed' | 'save_failed'
 }
 
 function contentOf(row: Pick<CatalogRecord, LexicalField>): MaybeLexicalContent {
@@ -28,209 +37,111 @@ function sameContent(a: Partial<MaybeLexicalContent>, b: Partial<MaybeLexicalCon
     a.zh_tw_example_translation === b.zh_tw_example_translation
 }
 
-function candidateInsert(db: PersistenceDatabase, plan: VocabularyPlan, userId: string,
-  sourceItemId: string, at: string, targetCatalogId = plan.target_catalog_id) {
-  return db.prepare(`INSERT INTO vocabulary_catalog_candidates (id, owner_user_id, source_item_id,
-    headword, normalized_key, part_of_speech, part_of_speech_key, sense_key, semantic_sense, source_context,
-    target_catalog_id, zh_tw_definition, english_example, zh_tw_example_translation, status, model,
-    prompt_version, validation_status, validation_confidence, provenance, content_hash, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'review_needed', ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(owner_user_id, source_item_id, normalized_key, part_of_speech_key, sense_key) DO NOTHING`)
-    .bind(crypto.randomUUID(), userId, sourceItemId, plan.item.headword, plan.normalized_key,
-      plan.item.part_of_speech, plan.part_of_speech_key, plan.sense_key, plan.item.semantic_sense,
-      plan.item.source_context, targetCatalogId, plan.content.zh_tw_definition ?? null,
-      plan.content.english_example ?? null, plan.content.zh_tw_example_translation ?? null,
-      plan.model, plan.prompt_version, plan.validation_status, plan.validation_confidence,
-      plan.provenance, plan.content_hash, at, at)
-}
-
 export async function saveVocabulary(
   db: PersistenceDatabase, userId: string, sourceItemId: string, plans: VocabularyPlan[], at: string,
 ): Promise<VocabularySaveResult[]> {
   if (!db.batch) throw new Error('D1 batch is required to save vocabulary.')
-  const results: VocabularySaveResult[] = Array(plans.length)
-  const statements: PersistenceStatement[] = []
-
+  const results: VocabularySaveResult[] = []
   for (const [planIndex, plan] of plans.entries()) {
-    if (plan.kind === 'review_needed') {
-      statements.push(candidateInsert(db, plan, userId, sourceItemId, at))
-      results[planIndex] = { headword: plan.item.headword, status: 'review_needed', reason: plan.reason ?? 'ambiguous_sense' }
+    if (plan.kind === 'ambiguous') {
+      results[planIndex] = { headword: plan.item.headword, status: 'ambiguous',
+        reason: plan.reason === 'low_confidence' ? 'low_confidence' : 'ambiguous_sense',
+        item: plan.item, options: plan.options ?? [] }
       continue
     }
-
-    if (plan.target_catalog_id) {
+    if (plan.kind === 'invalid') {
+      results[planIndex] = { headword: plan.item.headword, status: 'not_saved',
+        reason: plan.reason === 'enrichment_unavailable' ? 'enrichment_unavailable' : 'invalid_content' }
+      continue
+    }
+    try {
       const catalog = plan.catalog
-      if (!catalog) throw new Error('Catalog enrichment target was not loaded.')
-      const isIncomplete = !complete(contentOf(catalog))
-      if (isIncomplete) {
-        const content = plan.content as LexicalContent
+      const content = plan.content as LexicalContent
+      const statements: PersistenceStatement[] = []
+      if (plan.target_catalog_id && !catalog) throw new Error('Catalog enrichment target was not loaded.')
+      if (catalog && !complete(contentOf(catalog))) {
         const hash = plan.content_hash ?? await vocabularyContentHash(content)
-        statements.push(db.prepare(`UPDATE vocabulary_catalog SET
-          zh_tw_definition = COALESCE(NULLIF(TRIM(zh_tw_definition), ''), ?),
-          english_example = COALESCE(NULLIF(TRIM(english_example), ''), ?),
-          zh_tw_example_translation = COALESCE(NULLIF(TRIM(zh_tw_example_translation), ''), ?),
-          content_version = content_version + 1, content_hash = ?, provenance = ?, model = ?, prompt_version = ?, updated_at = ?
-          WHERE id = ? AND publication_status = 'published' AND content_version = ?
-            AND (NULLIF(TRIM(zh_tw_definition), '') IS NULL OR NULLIF(TRIM(english_example), '') IS NULL
-              OR NULLIF(TRIM(zh_tw_example_translation), '') IS NULL)`)
-          .bind(content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
-            hash, plan.provenance, plan.model, plan.prompt_version, at, catalog.id, catalog.content_version))
-        statements.push(db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
-          zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
-          SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
-            zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
-          FROM vocabulary_catalog WHERE id = ? AND changes() > 0`)
-          .bind(crypto.randomUUID(), at, catalog.id))
-      } else {
-        continue
+        statements.push(
+          db.prepare(`UPDATE vocabulary_catalog SET
+            zh_tw_definition = COALESCE(NULLIF(TRIM(zh_tw_definition), ''), ?),
+            english_example = COALESCE(NULLIF(TRIM(english_example), ''), ?),
+            zh_tw_example_translation = COALESCE(NULLIF(TRIM(zh_tw_example_translation), ''), ?),
+            content_version = content_version + 1, content_hash = ?, provenance = ?, model = ?, prompt_version = ?, updated_at = ?
+            WHERE id = ? AND publication_status = 'published' AND content_version = ?
+              AND (NULLIF(TRIM(zh_tw_definition), '') IS NULL OR NULLIF(TRIM(english_example), '') IS NULL
+                OR NULLIF(TRIM(zh_tw_example_translation), '') IS NULL)`)
+            .bind(content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
+              hash, JSON.stringify({ previous: catalog.provenance, enrichment: JSON.parse(plan.provenance) }),
+              plan.model, plan.prompt_version, at, catalog.id, catalog.content_version),
+          db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
+            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+            SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
+              zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
+            FROM vocabulary_catalog WHERE id = ? AND changes() > 0`).bind(crypto.randomUUID(), at, catalog.id),
+        )
+      } else if (!plan.target_catalog_id) {
+        const id = crypto.randomUUID()
+        const hash = plan.content_hash ?? await vocabularyContentHash(content)
+        statements.push(
+          db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech,
+            part_of_speech_key, sense_key, semantic_sense, cefr_level, source_dataset, source_version,
+            provenance, zh_tw_definition, english_example, zh_tw_example_translation, publication_status,
+            owner_user_id, model, prompt_version, content_version, content_hash, published_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai', ?, ?, ?, ?, ?, 'published', NULL, ?, ?, 1, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING`)
+            .bind(id, plan.item.headword, plan.normalized_key, plan.item.part_of_speech, plan.part_of_speech_key,
+              plan.sense_key, plan.item.semantic_sense, plan.prompt_version, plan.provenance,
+              content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
+              plan.model, plan.prompt_version, hash, at, at, at),
+          db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
+            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+            SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
+              zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
+            FROM vocabulary_catalog WHERE id = ? AND changes() > 0`).bind(crypto.randomUUID(), at, id),
+        )
       }
-      continue
-    }
-
-    const id = crypto.randomUUID()
-    const content = plan.content as LexicalContent
-    const hash = plan.content_hash ?? await vocabularyContentHash(content)
-    statements.push(db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech,
-      part_of_speech_key, sense_key, semantic_sense, cefr_level, source_dataset, source_version,
-      provenance, zh_tw_definition, english_example, zh_tw_example_translation, publication_status,
-      owner_user_id, model, prompt_version, content_version, content_hash, published_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai', ?, ?, ?, ?, ?, 'published', NULL, ?, ?, 1, ?, ?, ?, ?)
-      ON CONFLICT DO NOTHING`)
-      .bind(id, plan.item.headword, plan.normalized_key, plan.item.part_of_speech, plan.part_of_speech_key,
-        plan.sense_key, plan.item.semantic_sense, plan.prompt_version,
-        plan.provenance, content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
-        plan.model, plan.prompt_version, hash, at, at, at))
-    statements.push(db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
-      zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
-      SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
-        zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
-      FROM vocabulary_catalog WHERE id = ? AND changes() > 0`)
-      .bind(crypto.randomUUID(), at, id))
-  }
-
-  if (statements.length) {
-    const batch = await db.batch(statements)
-    if (batch.length !== statements.length || batch.some(result => !result.success)) {
-      throw new Error('Vocabulary catalog write batch failed.')
-    }
-  }
-
-  for (const [index, plan] of plans.entries()) {
-    if (plan.kind !== 'review_needed') continue
-    const candidate = await db.prepare(`SELECT id FROM vocabulary_catalog_candidates WHERE owner_user_id = ?
-      AND source_item_id = ? AND normalized_key = ? AND part_of_speech_key = ? AND sense_key = ?`)
-      .bind(userId, sourceItemId, plan.normalized_key, plan.part_of_speech_key, plan.sense_key).first<{ id: string }>()
-    if (!candidate) throw new Error('Vocabulary review candidate could not be stored.')
-    results[index] = { ...results[index], candidate_id: candidate.id }
-  }
-
-  const cards: { plan: VocabularyPlan; resultIndex: number; catalogId: string; index: number }[] = []
-  for (const [planIndex, plan] of plans.entries()) {
-    if (plan.kind !== 'ready') continue
-    const row = plan.target_catalog_id
-      ? await db.prepare(`SELECT id, publication_status, zh_tw_definition, english_example, zh_tw_example_translation
-          FROM vocabulary_catalog WHERE id = ?`).bind(plan.target_catalog_id).first<{
-          id: string; publication_status: string; zh_tw_definition: string | null;
-          english_example: string | null; zh_tw_example_translation: string | null
-        }>()
-      : await db.prepare(`SELECT id, publication_status, zh_tw_definition, english_example, zh_tw_example_translation
-          FROM vocabulary_catalog WHERE normalized_key = ? AND part_of_speech_key = ? AND sense_key = ?
-            AND publication_status = 'published'`).bind(plan.normalized_key, plan.part_of_speech_key, plan.sense_key).first<{
-          id: string; publication_status: string; zh_tw_definition: string | null;
-          english_example: string | null; zh_tw_example_translation: string | null
-        }>()
-    if (!row || row.publication_status !== 'published' || !complete(contentOf(row))) {
-      const reviewPlan: VocabularyPlan = { ...plan, kind: 'review_needed', target_catalog_id: row?.id ?? null,
-        reason: 'catalog_changed', validation_status: 'review_needed' }
-      const candidateId = await saveCandidate(db, reviewPlan, userId, sourceItemId, at)
-      results[planIndex] = { headword: plan.item.headword, status: 'review_needed',
-        candidate_id: candidateId, reason: 'catalog_changed' }
-      continue
-    }
-    if (plan.target_catalog_id && writeConflict(plan, row)) {
-      const reviewPlan: VocabularyPlan = { ...plan, kind: 'review_needed', target_catalog_id: row.id,
-        reason: 'catalog_conflict', validation_status: 'review_needed' }
-      const candidateId = await saveCandidate(db, reviewPlan, userId, sourceItemId, at)
-      results[planIndex] = { headword: plan.item.headword, status: 'review_needed',
-        candidate_id: candidateId, reason: 'catalog_conflict' }
-      continue
-    }
-    if (!plan.target_catalog_id && !sameContent(contentOf(row), plan.content)) {
-      const reviewPlan: VocabularyPlan = { ...plan, kind: 'review_needed', target_catalog_id: row.id,
-        reason: 'catalog_conflict', validation_status: 'review_needed' }
-      const candidateId = await saveCandidate(db, reviewPlan, userId, sourceItemId, at)
-      results[planIndex] = { headword: plan.item.headword, status: 'review_needed',
-        candidate_id: candidateId, reason: 'catalog_conflict' }
-      continue
-    }
-    const owned = await db.prepare('SELECT id FROM flashcards WHERE user_id = ? AND vocabulary_catalog_id = ?')
-      .bind(userId, row.id).first<{ id: string }>()
-    if (owned) {
-      results[planIndex] = { headword: plan.item.headword, status: 'already_saved' }
-      continue
-    }
-    const index = cards.length
-    cards.push({ plan, resultIndex: planIndex, catalogId: row.id, index })
-  }
-
-  if (cards.length) {
-    const cardStatements: PersistenceStatement[] = []
-    for (const card of cards) {
-      cardStatements.push(db.prepare(`INSERT INTO flashcards (id, user_id, source_item_id, card_type,
-        vocabulary_catalog_id, created_at, updated_at)
-        SELECT ?, ?, ?, 'vocabulary', id, ?, ? FROM vocabulary_catalog
-        WHERE id = ? AND publication_status = 'published' AND ? = 1 ON CONFLICT DO NOTHING`)
-        .bind(crypto.randomUUID(), userId, sourceItemId, at, at, card.catalogId,
-          complete(card.plan.content) ? 1 : 0))
-      cardStatements.push(db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)
-        SELECT ?, changes(), ? WHERE changes() > 0
-        ON CONFLICT(user_id) DO UPDATE SET
-          total_cards_created = user_stats.total_cards_created + excluded.total_cards_created,
-          updated_at = excluded.updated_at`).bind(userId, at))
-    }
-    const batch = await db.batch(cardStatements)
-    if (batch.length !== cardStatements.length || batch.some(result => !result.success)) {
-      throw new Error('Vocabulary flashcard batch failed.')
-    }
-    for (const card of cards) {
-      if (batch[card.index * 2].meta.changes > 0) {
-        results[card.resultIndex] = { headword: card.plan.item.headword, status: 'saved' }
+      const cardId = crypto.randomUUID()
+      const cardIndex = statements.length
+      statements.push(
+        db.prepare(`INSERT INTO flashcards (id, user_id, source_item_id, card_type, vocabulary_catalog_id, created_at, updated_at)
+          SELECT ?, ?, ?, 'vocabulary', id, ?, ? FROM vocabulary_catalog
+          WHERE ${plan.target_catalog_id ? 'id = ?' : 'normalized_key = ? AND part_of_speech_key = ? AND sense_key = ?'}
+            AND publication_status = 'published'
+            AND NULLIF(TRIM(zh_tw_definition), '') IS NOT NULL
+            AND NULLIF(TRIM(english_example), '') IS NOT NULL
+            AND NULLIF(TRIM(zh_tw_example_translation), '') IS NOT NULL
+          ON CONFLICT DO NOTHING`)
+          .bind(cardId, userId, sourceItemId, at, at,
+            ...(plan.target_catalog_id ? [plan.target_catalog_id] : [plan.normalized_key, plan.part_of_speech_key, plan.sense_key])),
+      )
+      statements.push(
+        db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)
+          SELECT ?, changes(), ? WHERE changes() > 0
+          ON CONFLICT(user_id) DO UPDATE SET
+            total_cards_created = user_stats.total_cards_created + excluded.total_cards_created,
+            updated_at = excluded.updated_at`).bind(userId, at),
+      )
+      const batch = await db.batch(statements)
+      if (batch.length !== statements.length || batch.some(result => !result.success)) throw new Error('Vocabulary write failed.')
+      if (batch[cardIndex].meta.changes > 0) {
+        results[planIndex] = { headword: plan.item.headword, status: 'saved', card_id: cardId }
       } else {
-        const owned = await db.prepare('SELECT id FROM flashcards WHERE user_id = ? AND vocabulary_catalog_id = ?')
-          .bind(userId, card.catalogId).first<{ id: string }>()
-        if (owned) {
-          results[card.resultIndex] = { headword: card.plan.item.headword, status: 'already_saved' }
-        } else {
-          const reviewPlan: VocabularyPlan = { ...card.plan, kind: 'review_needed',
-            target_catalog_id: card.catalogId, reason: 'catalog_changed', validation_status: 'review_needed' }
-          results[card.resultIndex] = { headword: card.plan.item.headword, status: 'review_needed',
-            candidate_id: await saveCandidate(db, reviewPlan, userId, sourceItemId, at), reason: 'catalog_changed' }
-        }
+        const existing = plan.target_catalog_id
+          ? await db.prepare('SELECT id FROM flashcards WHERE user_id = ? AND vocabulary_catalog_id = ?')
+            .bind(userId, plan.target_catalog_id).first<{ id: string }>()
+          : await db.prepare(`SELECT card.id FROM flashcards AS card JOIN vocabulary_catalog AS catalog
+              ON catalog.id = card.vocabulary_catalog_id WHERE card.user_id = ? AND catalog.normalized_key = ?
+                AND catalog.part_of_speech_key = ? AND catalog.sense_key = ?`)
+            .bind(userId, plan.normalized_key, plan.part_of_speech_key, plan.sense_key).first<{ id: string }>()
+        results[planIndex] = existing
+          ? { headword: plan.item.headword, status: 'already_saved', card_id: existing.id }
+          : { headword: plan.item.headword, status: 'not_saved', reason: 'catalog_changed' }
       }
+    } catch {
+      results[planIndex] = { headword: plan.item.headword, status: 'not_saved', reason: 'save_failed' }
     }
   }
   return results
-}
-
-function writeConflict(plan: VocabularyPlan, row: { zh_tw_definition: string | null; english_example: string | null;
-  zh_tw_example_translation: string | null }) {
-  const original: MaybeLexicalContent = plan.catalog ? contentOf(plan.catalog) : {
-    zh_tw_definition: null, english_example: null, zh_tw_example_translation: null,
-  }
-  return (plan.content.zh_tw_definition !== original.zh_tw_definition &&
-      row.zh_tw_definition !== plan.content.zh_tw_definition) ||
-    (plan.content.english_example !== original.english_example && row.english_example !== plan.content.english_example) ||
-    (plan.content.zh_tw_example_translation !== original.zh_tw_example_translation &&
-      row.zh_tw_example_translation !== plan.content.zh_tw_example_translation)
-}
-
-async function saveCandidate(db: PersistenceDatabase, plan: VocabularyPlan, userId: string, sourceItemId: string, at: string) {
-  await db.batch!([candidateInsert(db, plan, userId, sourceItemId, at)])
-  const candidate = await db.prepare(`SELECT id FROM vocabulary_catalog_candidates WHERE owner_user_id = ?
-    AND source_item_id = ? AND normalized_key = ? AND part_of_speech_key = ? AND sense_key = ?`)
-    .bind(userId, sourceItemId, plan.normalized_key, plan.part_of_speech_key, plan.sense_key).first<{ id: string }>()
-  if (!candidate) throw new Error('Vocabulary review candidate could not be stored.')
-  return candidate.id
 }
 
 export interface VocabularyReviewCandidate {

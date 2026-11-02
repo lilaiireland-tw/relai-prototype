@@ -596,12 +596,13 @@ created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 ```
 
-Canonical identity is `(normalized_key, part_of_speech_key, sense_key)`. A published
-entry is shared by all users; a `review_needed` entry is private to
-`owner_user_id`. `cefr_level` is nullable for AI-created vocabulary and accepts
-only A1–B2 when known; AI must not invent a level. Source identity and provenance
-remain traceable. Nullable lexical fields may be enriched only when missing, with
-each content change recorded in `vocabulary_catalog_versions`.
+Canonical identity is `(normalized_key, part_of_speech_key, sense_key)`, so distinct
+senses remain separate. A published entry is shared by all users; legacy
+`review_needed` entries remain private to `owner_user_id`. `cefr_level` is nullable
+for AI-created vocabulary and accepts only A1–B2 when known; AI must not invent a
+level. Source identity and provenance remain traceable. Nullable lexical fields
+may be enriched only when missing, with each content change recorded in
+`vocabulary_catalog_versions`; published non-empty fields are never overwritten.
 
 ## `vocabulary_catalog_sources`
 
@@ -679,9 +680,9 @@ created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 ```
 
-Candidates that fail confidence or conflict checks remain private and
-`review_needed`; administrators may publish or reject them through the review
-API. Candidate identity is idempotent per user, source item and sense.
+This table and its admin API are retained for legacy review records. The normal
+image vocabulary flow does not create candidates or wait for administrator
+approval; ambiguous senses return catalog options for the user to resolve.
 
 ## `user_vocabulary_items`
 
@@ -702,8 +703,8 @@ updated_at TEXT NOT NULL
 
 `user_vocabulary_items` is a retained legacy table for vocabulary captured
 before B5.4. Existing rows are preserved and their cards are remapped to private
-`review_needed` catalog records; new vocabulary saves use `vocabulary_catalog`
-and `vocabulary_catalog_candidates` only.
+`review_needed` catalog records; new vocabulary saves publish directly to
+`vocabulary_catalog`. The candidate table remains for legacy review records.
 
 ## `user_settings`
 
@@ -846,16 +847,23 @@ Cloudflare Worker secret only。
 
 # 十六、AI Structured Output
 
-AI 的責任是 extraction、sense matching、缺漏詞彙內容生成及內容驗證，不決定 application authorization / persistence。
+AI 的責任是 extraction、sense matching 與缺漏詞彙內容生成；Worker 以 strict JSON Schema 與 deterministic field validation 驗證回應，不要求第二次 AI validation 或 administrator approval。AI 不決定 application authorization / persistence。
 
-Vocabulary image extraction first returns headword, part of speech, semantic
-sense, source context and confidence. The Worker queries the canonical catalog
-using normalized headword and part of speech, then reuses a complete matching
-published record without generating lexical content. AI generates and validates
-only missing definition/example/translation fields. New or conflicting senses
-are published only when validation passes; otherwise a private review-needed
-candidate is resolvable through the administrator review API. A saved vocabulary
-card stores a canonical Catalog ID and user learning state only.
+Vocabulary image extraction returns up to 10 English headwords with part of
+speech, semantic sense, source context and confidence. The Worker searches by
+normalized headword and part of speech, then preserves identity by
+`(normalized_key, part_of_speech_key, sense_key)`. A complete matching published
+record reuses its canonical ID. Only missing fields are generated for incomplete
+records, and empty fields are filled without overwriting published content. New
+words and senses generate a definition, example and Traditional Chinese
+translation, then publish after strict schema and deterministic field checks.
+Uncertain sense matches return explicit catalog options for the user to choose;
+they are never merged by word spelling alone. Eligible words create user cards
+immediately, each referencing the canonical catalog ID and retaining its
+`source_item_id`; catalog provenance records the model and prompt. Per-word
+statuses allow a partial batch to succeed, and the response returns the created
+cards. The normal flow has no second AI validation request or administrator
+approval step. Source images are discarded after extraction.
 
 預期 schema：
 
@@ -973,7 +981,7 @@ Prefix：
 /relaiapp/api/v1
 ```
 
-目前已實作 `GET /health`、Auth、Onboarding、Cards、Reviews、Stats、Settings，以及 `POST /vocabulary/image`、`POST /vocabulary/save`。管理員可透過 vocabulary review API 發布或拒絕候選項目。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
+目前已實作 `GET /health`、Auth、Onboarding、Cards、Reviews、Stats、Settings，以及 `POST /vocabulary/image`、`POST /vocabulary/save`。管理員 review API 僅保留處理既有 legacy candidates；新圖片單字會逐項回傳結果並直接建立可用卡片。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
 
 ## Auth
 
@@ -1002,13 +1010,13 @@ POST /vocabulary/review/:id   (admin)
 ```
 
 Image extraction returns contract version 1, a user-owned `source_item_id` and
-suggestions containing `headword`, `part_of_speech`, `semantic_sense`,
-`source_context` and `confidence`. Saving submits only selected suggestions from
-that extraction. Results are explicitly `saved`, `already_saved` or
-`review_needed`; the latter includes a `candidate_id` that an administrator can
-publish or reject. Publish decisions may supply missing lexical fields; a
-candidate cannot publish while its definition, example or translation is
-incomplete. Source images are discarded after extraction.
+up to 10 suggestions containing `headword`, `part_of_speech`, `semantic_sense`,
+`source_context` and `confidence`. The client submits all suggestions
+automatically. Results are explicitly `saved`, `already_saved`, `ambiguous` or
+`not_saved`; an ambiguous result includes the item and published sense options
+for user resolution. The response includes the saved card records for immediate
+display and direct links. Source images are discarded after extraction. The
+admin review endpoints remain only for existing legacy candidates.
 
 ## Cards
 
@@ -1080,16 +1088,11 @@ AI error：
 source_item.failed
 ```
 
-避免：
-
-```text
-AI 成功一半
-→ DB 寫兩張
-→ 第三張 validation fail
-→ 留下一半資料
-```
-
-Cards persistence 應視為一個完整 operation。
+For B5.4 image vocabulary, each word is its own atomic write unit. Eligible
+words are saved even when another word is ambiguous or invalid, and every item
+returns an individual status. The canonical update, version snapshot, user card
+and stats update for one word remain atomic. Other ingestion flows define their
+own transaction boundary.
 
 ---
 
@@ -1606,7 +1609,7 @@ Cloudflare URL 可正常載入
 
 ## Phase 5 — AI（進行中）
 
-- B5.4 圖片詞彙辨識、sense-aware canonical catalog reuse/enrichment、內容驗證及管理員 review API 已實作；staging migration 與操作驗證待依手冊進行
+- B5.4 圖片詞彙辨識與 sense-aware canonical catalog reuse/enrichment 已實作；新詞彙會通過 deterministic field validation 後立即發布並建立卡片，模糊詞義由使用者選擇既有詞義；staging migration 與操作驗證待依手冊進行
 - text ingestion、Error Log AI extraction、retry/latency 產品驗收尚未完成
 
 ## Phase 6 — PWA（尚未開始）

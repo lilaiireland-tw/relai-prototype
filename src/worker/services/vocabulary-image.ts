@@ -15,7 +15,7 @@ export const vocabularySuggestionSchema = z.strictObject({
 const suggestionsSchema = z.strictObject({ version: z.literal(1), suggestions: z.array(vocabularySuggestionSchema).max(10) })
 export type VocabularySuggestion = z.infer<typeof vocabularySuggestionSchema>
 export type VocabularySelection = Pick<VocabularySuggestion,
-  'headword' | 'part_of_speech' | 'semantic_sense' | 'source_context'>
+  'headword' | 'part_of_speech' | 'semantic_sense' | 'source_context'> & { resolve_sense?: boolean }
 
 export function isImageCapableGeminiModel(value: string) { return imageModel.test(value) }
 
@@ -61,12 +61,12 @@ export async function requestVocabularyJson(
 }
 
 const recognitionJsonSchema = {
-  type: 'object',
+  type: 'object', additionalProperties: false,
   properties: {
     version: { type: 'integer' },
     suggestions: {
       type: 'array', maxItems: 10,
-      items: { type: 'object', properties: {
+      items: { type: 'object', additionalProperties: false, properties: {
         headword: { type: 'string' }, part_of_speech: { type: 'string', enum: partsOfSpeech },
         semantic_sense: { type: 'string' }, source_context: { type: 'string' }, confidence: { type: 'number' },
       }, required: ['headword', 'part_of_speech', 'semantic_sense', 'source_context', 'confidence'] },

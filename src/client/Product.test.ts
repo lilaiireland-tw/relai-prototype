@@ -135,47 +135,67 @@ describe('Phase 4 authenticated product UI', () => {
   expect(requests('/onboarding/level')).toHaveLength(1)
  })
 
- it('extracts a picture preview, saves only checked words, and reloads the new flashcard', async () => {
+ it('automatically saves recognized words and links directly to their cards', async () => {
   await renderAt('capture')
-  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="從裝置選擇照片"]')!
   const file = new File([new Uint8Array([137, 80, 78, 71])], 'lesson.png', { type: 'image/png' })
   await act(() => {
    Object.defineProperty(input, 'files', { configurable: true, value: [file] })
    input.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await click(button('解析圖片'))
+  await click(button('辨識並建立單字卡'))
   expect(container.textContent).toContain('She was curious about the old map.')
-  const checked = container.querySelector<HTMLInputElement>('input[aria-label="選擇 map"]')!
-  await click(checked)
-  const cardsBefore = requests('/cards').length
-  await click(button('儲存勾選單字'))
   const uploadCall = requests('/vocabulary/image', 'POST')[0][1]!
   expect(uploadCall.body).toBeInstanceOf(FormData)
   expect(new Headers(uploadCall.headers).has('Content-Type')).toBe(false)
   const saveCall = requests('/vocabulary/save', 'POST')[0][1]!
-  expect(JSON.parse(String(saveCall.body)).items.map((item: { headword: string }) => item.headword)).toEqual(['curious'])
-  expect(server.home.cards.some(card => card.front_content === 'curious')).toBe(true)
-  await click(container.querySelector('a[href="/relaiapp/vocabulary"]')!)
-  expect(requests('/cards').length).toBeGreaterThan(cardsBefore)
-  expect(window.location.pathname).toBe('/relaiapp/vocabulary')
-  expect(container.textContent).toContain('curious')
-  await refreshAt('cards')
+  expect(JSON.parse(String(saveCall.body)).items.map((item: { headword: string }) => item.headword)).toEqual(['curious', 'map'])
+  expect(container.textContent).toContain('已建立 2 張單字卡')
+  const link = container.querySelector<HTMLAnchorElement>('a[href^="/relaiapp/cards/"]')!
+  expect(link).toBeTruthy()
+  expect(link.textContent).toContain('curious')
+  await click(link)
+  expect(window.location.pathname).toContain('/cards/')
   expect(container.textContent).toContain('curious')
  })
- it('shows the review-needed state and candidate reference for admin resolution', async () => {
+ it('lets the user resolve an ambiguous catalog sense', async () => {
+  const sourceId = '00000000-0000-4000-8000-000000000099'
+  const cardId = '00000000-0000-4000-8000-000000000098'
+  const ambiguous = { headword: 'bank', status: 'ambiguous', reason: 'ambiguous_sense',
+   item: { headword: 'bank', part_of_speech: 'noun', semantic_sense: 'land beside water',
+    source_context: 'They walked beside the bank.', confidence: 0.99 },
+   options: [{ catalog_id: '00000000-0000-4000-8000-000000000097', semantic_sense: 'land beside a river' }] }
+  const card = { id: cardId, user_id: 'owner', source_item_id: sourceId, card_type: 'vocabulary',
+   front_content: 'bank', back_content: 'river edge', part_of_speech: 'noun', zh_tw_definition: '河岸',
+   english_example: 'They walked along the bank.', zh_tw_example_translation: '他們沿著河岸走。',
+   explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
+   last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  const fallback = server.response
+  server.response = (url, init) => {
+   const path = new URL(url, 'https://example.test').pathname
+   if (path.endsWith('/vocabulary/image')) return Response.json({ contract_version: 1, source_item_id: sourceId,
+    suggestions: [ambiguous.item] })
+   if (path.endsWith('/vocabulary/save')) {
+    const items = JSON.parse(String(init?.body)).items as { semantic_sense: string }[]
+    return items[0].semantic_sense === 'land beside a river'
+     ? Response.json({ results: [{ headword: 'bank', status: 'saved', card_id: cardId }], cards: [card] })
+     : Response.json({ results: [ambiguous], cards: [] })
+   }
+   return fallback(url, init)
+  }
   await renderAt('capture')
-  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="從裝置選擇照片"]')!
   await act(() => {
    Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'lesson.png', { type: 'image/png' })] })
    input.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await click(button('解析圖片'))
-  vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ results: [{
-    headword: 'curious', status: 'review_needed', reason: 'ambiguous_sense', candidate_id: 'candidate-1',
-  }] }))
-  await click(button('儲存勾選單字'))
-   expect(container.textContent).toContain('需要管理員審核')
-   expect(container.textContent).toContain('審核編號：candidate-1')
+  await click(button('辨識並建立單字卡'))
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(1)
+  expect(container.textContent).toContain('無法安全判斷「bank」的詞義')
+  await click(button('使用「land beside a river」'))
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(2)
+  expect(container.textContent).toContain('已建立 1 張單字卡')
+  expect(container.querySelector(`a[href="/relaiapp/cards/${cardId}"]`)).toBeTruthy()
  })
  it('keeps the answer off the card front and separates each back field', async () => {
   await renderAt('cards')
@@ -230,8 +250,8 @@ describe('Phase 4 authenticated product UI', () => {
   expect(container.querySelector('a[href="/relaiapp/capture"]')?.textContent).toContain('AI 辨識')
   expect(container.querySelector('a[href="/relaiapp/error-log"]')).toBeNull()
   await click(container.querySelector('a[href="/relaiapp/capture"]')!)
-  const camera = container.querySelector<HTMLInputElement>('input[aria-label="拍攝英文學習圖片"]')!
-  const picker = container.querySelector<HTMLInputElement>('input[aria-label="選擇英文學習圖片"]')!
+  const camera = container.querySelector<HTMLInputElement>('input[aria-label="拍攝照片"]')!
+  const picker = container.querySelector<HTMLInputElement>('input[aria-label="從裝置選擇照片"]')!
   expect(camera.getAttribute('capture')).toBe('environment')
   expect(camera.accept).toBe('image/*')
   expect(picker.accept).toContain('image/png')
