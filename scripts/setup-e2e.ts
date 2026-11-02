@@ -42,7 +42,7 @@ export async function prepareE2E() {
     ...['apple', 'book', 'cat'].map((word, index) => {
       const id = `e2e-${3 - index}`
       return `INSERT INTO vocabulary_catalog (id,headword,normalized_key,cefr_level,source_dataset,source_version,provenance,english_example,created_at,updated_at) VALUES (${quote(id)},${quote(word)},${quote(word)},'A1','local-e2e','82','Synthetic local-only fixture',${quote(`This is a ${word}.`)},${quote(at)},${quote(at)});
-      INSERT INTO flashcards (id,user_id,card_type,vocabulary_catalog_id,vocabulary_key,created_at,updated_at) VALUES (${quote(id)},'e2e-user','vocabulary',${quote(id)},${quote(word)},${quote(at)},${quote(at)});`
+      INSERT INTO flashcards (id,user_id,card_type,vocabulary_catalog_id,created_at,updated_at) VALUES (${quote(id)},'e2e-user','vocabulary',${quote(id)},${quote(at)},${quote(at)});`
     }),
   ].join('\n')
   const seed = resolve(persistence, 'seed.sql')

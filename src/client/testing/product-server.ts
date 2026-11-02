@@ -9,26 +9,30 @@ export function productServer() {
   const path = new URL(url, 'https://example.test')
   const body = init?.body && !(init.body instanceof FormData) ? JSON.parse(String(init.body)) : {}
   if (path.pathname.endsWith('/vocabulary/image')) return Response.json({
+   contract_version: 1,
    source_item_id: '00000000-0000-4000-8000-000000000001',
    suggestions: [
-    { headword: 'curious', part_of_speech: 'adjective', zh_tw_definition: '好奇的',
-     english_example: 'She was curious about the old map.', zh_tw_example_translation: '她對那張舊地圖感到好奇。' },
-    { headword: 'map', part_of_speech: 'noun', zh_tw_definition: '地圖',
-     english_example: 'The map showed the river.', zh_tw_example_translation: '地圖標示了那條河。' },
+    { headword: 'curious', part_of_speech: 'adjective', semantic_sense: 'eager to know',
+     source_context: 'She was curious about the old map.', confidence: 0.99 },
+    { headword: 'map', part_of_speech: 'noun', semantic_sense: 'a representation of an area',
+     source_context: 'The map showed the river.', confidence: 0.99 },
    ],
   })
   if (path.pathname.endsWith('/vocabulary/save')) {
-   const selected = body.items as { headword: string; part_of_speech: string; zh_tw_definition: string;
-    english_example: string; zh_tw_example_translation: string }[]
-   for (const [index, item] of selected.entries()) home.cards.unshift({
+   const selected = body.items as { headword: string; part_of_speech: string }[]
+   for (const [index, item] of selected.entries()) {
+    const content = item.headword === 'curious'
+     ? { zh_tw_definition: '好奇的', english_example: 'She was curious about the old map.', zh_tw_example_translation: '她對那張舊地圖感到好奇。' }
+     : { zh_tw_definition: '地圖', english_example: 'The map showed the river.', zh_tw_example_translation: '地圖標示了那條河。' }
+    home.cards.unshift({
     id: `saved-${home.cards.length}-${index}`, user_id: 'owner', source_item_id: body.source_item_id,
     card_type: 'vocabulary', front_content: item.headword,
-    back_content: `${item.zh_tw_definition}\n${item.english_example}\n${item.zh_tw_example_translation}`,
-    part_of_speech: item.part_of_speech, zh_tw_definition: item.zh_tw_definition,
-    english_example: item.english_example, zh_tw_example_translation: item.zh_tw_example_translation,
+    back_content: `${content.zh_tw_definition}\n${content.english_example}\n${content.zh_tw_example_translation}`,
+    part_of_speech: item.part_of_speech, ...content,
     explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
     last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
    })
+   }
    return Response.json({ results: selected.map(item => ({ headword: item.headword, status: 'saved' })) })
   }
   if (path.pathname.endsWith('/settings')) {

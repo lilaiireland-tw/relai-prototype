@@ -105,6 +105,19 @@ describe('same-origin client API', () => {
     await expect(createApiClient(transport).getHealth()).rejects.toMatchObject({ kind: 'invalid-response' })
   })
 
+  it('requires a resolvable candidate ID for every review-needed vocabulary result', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ results: [{ headword: 'bank',
+      status: 'review_needed', candidate_id: 'candidate-1', reason: 'ambiguous_sense' }] }))
+    const client = createApiClient(transport)
+    const items = [{ headword: 'bank', part_of_speech: 'noun', semantic_sense: 'river edge', source_context: 'by the river' }]
+    await expect(client.saveVocabulary('00000000-0000-4000-8000-000000000001', items)).resolves.toMatchObject({
+      results: [{ status: 'review_needed', candidate_id: 'candidate-1' }],
+    })
+    transport.mockResolvedValue(Response.json({ results: [{ headword: 'bank', status: 'review_needed' }] }))
+    await expect(client.saveVocabulary('00000000-0000-4000-8000-000000000001', items))
+      .rejects.toMatchObject({ kind: 'invalid-response' })
+  })
+
   it.each(['<html>SPA fallback</html>', '{broken'])('rejects non-JSON successful responses', async body => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(body))
     await expect(createApiClient(transport).getHealth()).rejects.toMatchObject({ kind: 'invalid-response' })

@@ -2,32 +2,25 @@ import { mutate, type PersistenceDatabase, type SqlValue } from './d1'
 import type { CardType, EditableFlashcard, FlashcardRow, SqlBoolean } from './types'
 
 const columns = `card.id, card.user_id, card.source_item_id, card.card_type,
-  CASE WHEN card.card_type = 'error_log' THEN card.front_content
-    ELSE COALESCE(catalog.headword, personal.headword) END AS front_content,
+  CASE WHEN card.card_type = 'error_log' THEN card.front_content ELSE catalog.headword END AS front_content,
   CASE WHEN card.card_type = 'error_log' THEN card.back_content ELSE
-    COALESCE(COALESCE(catalog.zh_tw_definition, personal.zh_tw_definition) || char(10), '') ||
-    COALESCE(catalog.english_example, personal.english_example,
-      'CEFR-J ' || catalog.cefr_level || COALESCE(' · ' || catalog.part_of_speech, ''), 'Vocabulary') ||
-    COALESCE(char(10) || COALESCE(catalog.zh_tw_example_translation, personal.zh_tw_example_translation), '')
+    COALESCE(catalog.zh_tw_definition || char(10), '') ||
+    COALESCE(catalog.english_example,
+      'CEFR-J ' || catalog.cefr_level || COALESCE(' · ' || catalog.part_of_speech, ''), catalog.semantic_sense, 'Vocabulary') ||
+    COALESCE(char(10) || catalog.zh_tw_example_translation, '')
   END AS back_content,
-  CASE WHEN card.card_type = 'error_log' THEN card.part_of_speech
-    ELSE COALESCE(catalog.part_of_speech, personal.part_of_speech) END AS part_of_speech,
-  CASE WHEN card.card_type = 'error_log' THEN card.zh_tw_definition
-    ELSE COALESCE(catalog.zh_tw_definition, personal.zh_tw_definition) END AS zh_tw_definition,
-  CASE WHEN card.card_type = 'error_log' THEN NULL
-    ELSE COALESCE(catalog.english_example, personal.english_example) END AS english_example,
-  CASE WHEN card.card_type = 'error_log' THEN NULL
-    ELSE COALESCE(catalog.zh_tw_example_translation, personal.zh_tw_example_translation) END AS zh_tw_example_translation,
+  CASE WHEN card.card_type = 'error_log' THEN card.part_of_speech ELSE catalog.part_of_speech END AS part_of_speech,
+  CASE WHEN card.card_type = 'error_log' THEN card.zh_tw_definition ELSE catalog.zh_tw_definition END AS zh_tw_definition,
+  CASE WHEN card.card_type = 'error_log' THEN NULL ELSE catalog.english_example END AS english_example,
+  CASE WHEN card.card_type = 'error_log' THEN NULL ELSE catalog.zh_tw_example_translation END AS zh_tw_example_translation,
   card.explanation,
-  CASE WHEN card.card_type = 'error_log' THEN card.irish_usage
-    ELSE COALESCE(catalog.irish_usage, personal.irish_usage) END AS irish_usage,
+  CASE WHEN card.card_type = 'error_log' THEN card.irish_usage ELSE catalog.irish_usage END AS irish_usage,
   CASE WHEN card.card_type = 'error_log' THEN card.source
-    ELSE COALESCE(catalog.source_dataset || ' ' || catalog.source_version, personal.source) END AS source,
+    ELSE catalog.source_dataset || ' ' || catalog.source_version END AS source,
   card.is_favorite, card.last_reviewed_at, card.next_review_at, card.created_at, card.updated_at`
 const joins = `FROM flashcards AS card
   LEFT JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
-  LEFT JOIN user_vocabulary_items AS personal ON personal.id = card.user_vocabulary_item_id
-    AND personal.user_id = card.user_id`
+    AND (catalog.publication_status = 'published' OR catalog.owner_user_id = card.user_id)`
 type StoredCard = Omit<FlashcardRow, 'is_favorite'> & { is_favorite: SqlBoolean }
 const mapCard = (row: StoredCard): FlashcardRow => ({ ...row, is_favorite: row.is_favorite === 1 })
 const editable = ['front_content', 'back_content', 'part_of_speech',

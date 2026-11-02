@@ -32,3 +32,16 @@ and leaves Error Log content on user-owned cards. It deletes prototype flashcard
 review events and stats and clears selected levels instead of backfilling; a
 separate approved staging operation is required before any remote application.
 The migration does not seed catalog data or personal vocabulary.
+
+`0005_canonical_sense_aware_vocabulary.sql` archives original CEFR-J source
+rows, creates canonical sense-aware records with provenance and content versions,
+and rebuilds vocabulary flashcards to reference only a catalog ID plus user
+learning state. It migrates legacy personal cards to private review-needed
+catalog rows and preserves users, sessions, source/onboarding records, settings,
+stats, favorites and review history. It must be applied only to a database that
+has completed 0001–0004; never rerun historical migrations. Because the old and
+new Worker schemas are incompatible, staging migration and matching Worker
+release must be coordinated by an operator. See the B5.4 section in
+[the migration workflow](../docs/d1-migrations.md) for backup, rehearsal and
+verification steps. No remote D1 migration is performed by ordinary tests, CI,
+build or deployment.

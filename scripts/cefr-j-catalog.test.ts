@@ -124,11 +124,12 @@ describe('CEFR-J catalog import', () => {
 
   it('rejects a different installed version without overwriting it', async () => {
     const { sqlite, db } = localDatabase()
-    sqlite.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, cefr_level, source_dataset,
-      source_version, provenance, created_at, updated_at) VALUES ('old', 'book', 'book', 'A1', ?,
+    sqlite.prepare(`INSERT INTO vocabulary_catalog_sources (id, headword, normalized_key, cefr_level,
+      source_dataset, source_version, provenance, created_at, updated_at) VALUES ('old', 'book', 'book', 'A1', ?,
       '1.5', 'old source', '2026-10-01', '2026-10-01')`).run(DATASET)
     await expect(importCatalog(db, fixture)).rejects.toThrow(/different CEFR-J catalog version/)
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog').get()).toEqual({ count: 1 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog_sources').get()).toEqual({ count: 1 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog').get()).toEqual({ count: 0 })
     sqlite.close()
   })
 

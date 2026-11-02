@@ -162,7 +162,7 @@ describe('Phase 4 authenticated product UI', () => {
   await refreshAt('cards')
   expect(container.textContent).toContain('curious')
  })
- it('shows an explicit pending message for ambiguous catalog matches', async () => {
+ it('shows the review-needed state and candidate reference for admin resolution', async () => {
   await renderAt('capture')
   const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
   await act(() => {
@@ -171,11 +171,11 @@ describe('Phase 4 authenticated product UI', () => {
   })
   await click(button('解析圖片'))
   vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ results: [{
-   headword: 'curious', status: 'pending', reason: 'catalog_ambiguous', catalog_definition: '好奇的',
+    headword: 'curious', status: 'review_needed', reason: 'ambiguous_sense', candidate_id: 'candidate-1',
   }] }))
   await click(button('儲存勾選單字'))
-  expect(container.textContent).toContain('目錄中有多個可能的項目')
-  expect(container.textContent).toContain('暫時待補充')
+   expect(container.textContent).toContain('需要管理員審核')
+   expect(container.textContent).toContain('審核編號：candidate-1')
  })
  it('keeps the answer off the card front and separates each back field', async () => {
   await renderAt('cards')

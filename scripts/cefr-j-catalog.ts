@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 export const DATASET = 'CEFR-J Vocabulary Profile'
 export const VERSION = '1.6'
@@ -33,7 +33,7 @@ export interface CatalogStatement {
 
 export interface CatalogDatabase {
   prepare(sql: string): {
-    bind(...values: (string | null)[]): CatalogStatement
+    bind(...values: (string | number | null)[]): CatalogStatement
     all<T>(): Promise<{ results: T[]; success: boolean }>
   }
   batch(statements: CatalogStatement[]): Promise<{ success: boolean; meta: { changes: number } }[]>
@@ -125,7 +125,7 @@ export async function importCatalog(db: CatalogDatabase, source: unknown): Promi
     throw new CatalogImportError(error instanceof Error ? error.message : 'Catalog source validation failed.',
       { inserted: 0, skipped: 0, rejected: 1 })
   }
-  const versions = await db.prepare('SELECT DISTINCT source_version FROM vocabulary_catalog WHERE source_dataset = ?')
+  const versions = await db.prepare('SELECT DISTINCT source_version FROM vocabulary_catalog_sources WHERE source_dataset = ?')
     .bind(DATASET).all<{ source_version: string }>()
   if (!versions.success) throw new Error('Could not inspect catalog versions.')
   if (versions.results.some(row => row.source_version !== VERSION)) {
@@ -133,7 +133,7 @@ export async function importCatalog(db: CatalogDatabase, source: unknown): Promi
       { inserted: 0, skipped: 0, rejected: rows.length })
   }
   const existing = await db.prepare(`SELECT id, headword, normalized_key, part_of_speech, cefr_level,
-      source_dataset, source_version, provenance FROM vocabulary_catalog WHERE source_dataset = ? AND source_version = ?`)
+      source_dataset, source_version, provenance FROM vocabulary_catalog_sources WHERE source_dataset = ? AND source_version = ?`)
     .bind(DATASET, VERSION).all<CatalogRow>()
   if (!existing.success) throw new Error('Could not inspect existing catalog rows.')
   const byIdentity = new Map(existing.results.map(row => [identity(row), row]))
@@ -148,11 +148,27 @@ export async function importCatalog(db: CatalogDatabase, source: unknown): Promi
   const pending = rows.filter(row => !byIdentity.has(identity(row)))
   const timestamp = new Date().toISOString()
   for (let start = 0; start < pending.length; start += 100) {
-    const statements = pending.slice(start, start + 100).map(row => db.prepare(`INSERT INTO vocabulary_catalog
-      (id, headword, normalized_key, part_of_speech, cefr_level, source_dataset, source_version,
-       provenance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(row.id, row.headword, row.normalized_key, row.part_of_speech, row.cefr_level,
-        row.source_dataset, row.source_version, row.provenance, timestamp, timestamp))
+    const statements = pending.slice(start, start + 100).flatMap(row => {
+      const posKey = (row.part_of_speech?.trim() || 'unknown').toLowerCase()
+      const senseKey = `cefrj:${row.cefr_level}`
+      return [
+        db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech,
+          part_of_speech_key, sense_key, semantic_sense, cefr_level, source_dataset, source_version,
+          provenance, publication_status, content_version, published_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'CEFR-J sense requires source context.', ?, ?, ?, ?,
+            'published', 1, ?, ?, ?)`)
+          .bind(row.id, row.headword, row.normalized_key, row.part_of_speech, posKey, senseKey,
+            row.cefr_level, row.source_dataset, row.source_version, row.provenance, timestamp, timestamp, timestamp),
+        db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash, provenance, created_at)
+          SELECT ?, id, content_version, content_hash, provenance, ? FROM vocabulary_catalog
+          WHERE id = ? AND changes() > 0`).bind(randomUUID(), timestamp, row.id),
+        db.prepare(`INSERT INTO vocabulary_catalog_sources (id, headword, normalized_key, part_of_speech,
+          cefr_level, source_dataset, source_version, provenance, created_at, updated_at, canonical_catalog_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(row.id, row.headword, row.normalized_key, row.part_of_speech, row.cefr_level,
+            row.source_dataset, row.source_version, row.provenance, timestamp, timestamp, row.id),
+      ]
+    })
     try {
       const results = await db.batch(statements)
       if (results.length !== statements.length || results.some(result => !result.success || result.meta.changes !== 1)) {
@@ -214,27 +230,54 @@ export async function importReviewedDemo(db: CatalogDatabase, source: unknown) {
     ].some(([oldValue, newValue]) => !oldValue?.trim() && Boolean(newValue?.trim())))
   }
   const timestamp = new Date().toISOString()
+  const hash = (row: Pick<ReviewedDemoRow, 'zh_tw_definition' | 'english_example' | 'zh_tw_example_translation' | 'irish_usage'>) => createHash('sha256').update(JSON.stringify([
+    row.zh_tw_definition, row.english_example, row.zh_tw_example_translation, row.irish_usage,
+  ])).digest('hex')
+  const finalContent = (row: ReviewedDemoRow) => {
+    const current = previous.get(row.id)
+    return {
+      zh_tw_definition: current?.zh_tw_definition?.trim() ? current.zh_tw_definition : row.zh_tw_definition,
+      english_example: current?.english_example?.trim() ? current.english_example : row.english_example,
+      zh_tw_example_translation: current?.zh_tw_example_translation?.trim()
+        ? current.zh_tw_example_translation : row.zh_tw_example_translation,
+      irish_usage: current?.irish_usage?.trim() ? current.irish_usage : row.irish_usage,
+    }
+  }
   const statements: CatalogStatement[] = rows.flatMap(row => [
-    db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, cefr_level,
-      source_dataset, source_version, provenance, zh_tw_definition, english_example,
-      zh_tw_example_translation, irish_usage, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'B1', ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
+    db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, part_of_speech_key,
+      sense_key, semantic_sense, cefr_level, source_dataset, source_version, provenance, zh_tw_definition,
+      english_example, zh_tw_example_translation, irish_usage, publication_status, content_version,
+      content_hash, published_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'Reviewed B1 demo sense.', 'B1', ?, ?, ?, ?, ?, ?, ?,
+        'published', 1, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
       .bind(row.id, row.headword, normalizeKey(row.headword), row.part_of_speech,
-        DATASET, VERSION, PROVENANCE, row.zh_tw_definition, row.english_example,
-        row.zh_tw_example_translation, row.irish_usage, timestamp, timestamp),
+        row.part_of_speech.trim().toLowerCase(), `reviewed-demo:${row.id}`, DATASET, VERSION, PROVENANCE,
+        row.zh_tw_definition, row.english_example, row.zh_tw_example_translation, row.irish_usage,
+        hash(row), timestamp, timestamp, timestamp),
+    db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash, zh_tw_definition,
+      english_example, zh_tw_example_translation, irish_usage, provenance, created_at)
+      SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
+        zh_tw_example_translation, irish_usage, provenance, ? FROM vocabulary_catalog
+      WHERE id = ? AND changes() > 0`).bind(randomUUID(), timestamp, row.id),
     db.prepare(`UPDATE vocabulary_catalog SET
       zh_tw_definition = COALESCE(NULLIF(TRIM(zh_tw_definition), ''), ?),
       english_example = COALESCE(NULLIF(TRIM(english_example), ''), ?),
       zh_tw_example_translation = COALESCE(NULLIF(TRIM(zh_tw_example_translation), ''), ?),
-      irish_usage = COALESCE(NULLIF(TRIM(irish_usage), ''), ?), updated_at = ?
+      irish_usage = COALESCE(NULLIF(TRIM(irish_usage), ''), ?), content_version = content_version + 1,
+      content_hash = ?, updated_at = ?
       WHERE id = ? AND headword = ? AND normalized_key = ? AND part_of_speech = ?
         AND cefr_level = 'B1' AND source_dataset = ? AND source_version = ? AND provenance = ?
         AND (NULLIF(TRIM(zh_tw_definition), '') IS NULL OR NULLIF(TRIM(english_example), '') IS NULL
           OR NULLIF(TRIM(zh_tw_example_translation), '') IS NULL
           OR (? IS NOT NULL AND NULLIF(TRIM(irish_usage), '') IS NULL))`)
       .bind(row.zh_tw_definition, row.english_example, row.zh_tw_example_translation,
-        row.irish_usage, timestamp, row.id, row.headword, normalizeKey(row.headword),
+        row.irish_usage, hash(finalContent(row)), timestamp, row.id, row.headword, normalizeKey(row.headword),
         row.part_of_speech, DATASET, VERSION, PROVENANCE, row.irish_usage),
+    db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash, zh_tw_definition,
+      english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+      SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
+        zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ? FROM vocabulary_catalog
+      WHERE id = ? AND changes() > 0`).bind(randomUUID(), timestamp, row.id),
   ])
   const results = await db.batch(statements)
   if (results.length !== statements.length || results.some(result => !result.success)) {

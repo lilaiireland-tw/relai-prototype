@@ -2,15 +2,33 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AuthEnv } from '../auth/types'
 import { requireAuth, requirePasswordChanged } from '../middleware/auth'
-import { saveVocabulary } from '../persistence/vocabulary'
+import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary } from '../persistence/vocabulary'
 import { extractVocabularyFromImage, isImageCapableGeminiModel, vocabularySuggestionSchema } from '../services/vocabulary-image'
+import { prepareVocabulary, VocabularyAiError } from '../services/vocabulary-catalog'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_MULTIPART_BYTES = MAX_IMAGE_BYTES + 64 * 1024
+const selectionSchema = z.strictObject({
+  headword: z.string().trim().min(1).max(100),
+  part_of_speech: z.string().trim().min(1).max(40),
+  semantic_sense: z.string().trim().min(1).max(160),
+  source_context: z.string().trim().min(1).max(500),
+})
+const extractionSchema = z.strictObject({ version: z.literal(1), suggestions: z.array(vocabularySuggestionSchema).max(10) })
 const saveInput = z.strictObject({
   source_item_id: z.string().uuid(),
-  items: z.array(vocabularySuggestionSchema).min(1).max(10),
+  items: z.array(selectionSchema).min(1).max(10),
 })
+const candidateReviewInput = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('reject') }),
+  z.strictObject({
+    action: z.literal('publish'),
+    semantic_sense: z.string().trim().min(1).max(160).optional(),
+    zh_tw_definition: z.string().trim().min(1).max(500).optional(),
+    english_example: z.string().trim().min(1).max(1000).optional(),
+    zh_tw_example_translation: z.string().trim().min(1).max(1000).optional(),
+  }),
+])
 
 async function readImage(request: Request): Promise<
   { file: File; bytes: Uint8Array; mimeType: string } | { status: 400 | 413 | 415 }
@@ -82,12 +100,14 @@ vocabulary.post('/image', async c => {
     return c.json({ error: { code: 'EXTRACTION_FAILED', message: 'Image vocabulary could not be extracted.' } }, 502)
   }
   const sourceItemId = crypto.randomUUID()
+  const at = new Date().toISOString()
   const inserted = await c.env.DB.prepare(`INSERT INTO source_items
     (id, user_id, source_type, raw_text, processing_status, ai_model, created_at, updated_at)
-    VALUES (?, ?, 'image', NULL, 'processed', ?, ?, ?)`)
-    .bind(sourceItemId, c.get('user').id, extracted.model, new Date().toISOString(), new Date().toISOString()).run()
+    VALUES (?, ?, 'image', ?, 'processed', ?, ?, ?)`)
+    .bind(sourceItemId, c.get('user').id, JSON.stringify({ version: 1, suggestions: extracted.suggestions }),
+      extracted.model, at, at).run()
   if (!inserted.success) throw new Error('Could not record image extraction metadata.')
-  return c.json({ source_item_id: sourceItemId, suggestions: extracted.suggestions })
+  return c.json({ contract_version: 1, source_item_id: sourceItemId, suggestions: extracted.suggestions })
 })
 
 vocabulary.post('/save', async c => {
@@ -96,10 +116,59 @@ vocabulary.post('/save', async c => {
   const input = saveInput.safeParse(body)
   if (!input.success) return c.json({ error: { code: 'INVALID_INPUT', message: 'Select up to 10 valid vocabulary suggestions.' } }, 400)
   const userId = c.get('user').id
-  const source = await c.env.DB.prepare(`SELECT id FROM source_items
+  const source = await c.env.DB.prepare(`SELECT id, raw_text, ai_model FROM source_items
     WHERE id = ? AND user_id = ? AND source_type = 'image' AND processing_status = 'processed'`)
-    .bind(input.data.source_item_id, userId).first<{ id: string }>()
+    .bind(input.data.source_item_id, userId).first<{ id: string; raw_text: string | null; ai_model: string | null }>()
   if (!source) return c.json({ error: { code: 'SOURCE_NOT_FOUND', message: 'Image extraction was not found.' } }, 404)
-  const results = await saveVocabulary(c.env.DB, userId, source.id, input.data.items, new Date().toISOString())
-  return c.json({ results })
+  let extraction: z.infer<typeof extractionSchema>
+  try {
+    extraction = extractionSchema.parse(JSON.parse(source.raw_text ?? ''))
+  } catch {
+    return c.json({ error: { code: 'EXTRACTION_NOT_FOUND', message: 'Recognized words are no longer available.' } }, 409)
+  }
+  const bySelection = new Map(extraction.suggestions.map(item => [JSON.stringify([
+    item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
+  ]), item]))
+  const items = input.data.items.map(item => bySelection.get(JSON.stringify([
+    item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
+  ])))
+  if (items.some(item => !item)) {
+    return c.json({ error: { code: 'INVALID_INPUT', message: 'Select words from this image extraction.' } }, 400)
+  }
+  try {
+    const plans = await prepareVocabulary(c.env.DB, userId, source.id, items as z.infer<typeof vocabularySuggestionSchema>[],
+      c.env, source.ai_model ?? 'unknown')
+    const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
+    return c.json({ results })
+  } catch (error) {
+    if (error instanceof VocabularyAiError) {
+      return error.unavailable
+        ? c.json({ error: { code: 'GEMINI_UNAVAILABLE', message: 'Vocabulary validation is unavailable.' } }, 503)
+        : c.json({ error: { code: 'ENRICHMENT_FAILED', message: 'Vocabulary content could not be validated.' } }, 502)
+    }
+    throw error
+  }
+})
+
+vocabulary.get('/review', async c => {
+  if (c.get('user').role !== 'admin') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Administrator access required.' } }, 403)
+  }
+  return c.json({ candidates: await listVocabularyReviewCandidates(c.env.DB) })
+})
+
+vocabulary.post('/review/:id', async c => {
+  if (c.get('user').role !== 'admin') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Administrator access required.' } }, 403)
+  }
+  let body: unknown
+  try { body = await c.req.json() } catch { body = undefined }
+  const input = candidateReviewInput.safeParse(body)
+  if (!input.success) return c.json({ error: { code: 'INVALID_INPUT', message: 'Provide a valid candidate review decision.' } }, 400)
+  const result = await reviewVocabularyCandidate(c.env.DB, c.req.param('id'), c.get('user').id,
+    input.data, new Date().toISOString())
+  if (result.status === 'not_found') return c.json({ error: { code: 'CANDIDATE_NOT_FOUND', message: 'Review candidate was not found.' } }, 404)
+  if (result.status === 'incomplete') return c.json({ error: { code: 'INCOMPLETE_CANDIDATE', message: 'Add a definition, example and translation before publishing.' } }, 400)
+  if (result.status === 'conflict') return c.json({ error: { code: 'CATALOG_CONFLICT', message: 'Published content conflicts with this candidate. It was left unchanged; reject the candidate if it is not appropriate.' } }, 409)
+  return c.json({ status: result.status, ...(result.status === 'published' ? { catalog_id: result.catalog_id } : {}) })
 })

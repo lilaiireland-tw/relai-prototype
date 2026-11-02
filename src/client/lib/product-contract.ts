@@ -25,14 +25,15 @@ export const starterResponse = z.object({ english_level: z.enum(ENGLISH_LEVELS),
  starter_cards_created: z.number(), already_selected: z.boolean() })
 export const reviewResponse = z.object({ completed: z.literal(true), already_completed: z.boolean() })
 const vocabularySuggestionSchema = z.strictObject({
- headword: z.string().min(1), part_of_speech: z.string().min(1), zh_tw_definition: z.string().min(1),
- english_example: z.string().min(1), zh_tw_example_translation: z.string().min(1),
+ headword: z.string().min(1), part_of_speech: z.string().min(1), semantic_sense: z.string().min(1),
+ source_context: z.string().min(1), confidence: z.number().min(0).max(1),
 })
 export const vocabularyImageResponse = z.strictObject({
- source_item_id: z.string().uuid(), suggestions: z.array(vocabularySuggestionSchema).max(10),
+ contract_version: z.literal(1), source_item_id: z.string().uuid(), suggestions: z.array(vocabularySuggestionSchema).max(10),
 })
-export const vocabularySaveResponse = z.strictObject({ results: z.array(z.strictObject({
- headword: z.string(), status: z.enum(['saved', 'already_saved', 'pending']),
- reason: z.enum(['definition_missing', 'definition_mismatch', 'content_incomplete', 'catalog_ambiguous', 'catalog_changed']).optional(),
- catalog_definition: z.string().nullable().optional(),
-})) })
+const vocabularyReviewReason = z.enum(['ambiguous_sense', 'low_confidence', 'validation_failed', 'catalog_conflict', 'catalog_changed'])
+export const vocabularySaveResponse = z.strictObject({ results: z.array(z.discriminatedUnion('status', [
+ z.strictObject({ headword: z.string(), status: z.literal('saved') }),
+ z.strictObject({ headword: z.string(), status: z.literal('already_saved') }),
+ z.strictObject({ headword: z.string(), status: z.literal('review_needed'), candidate_id: z.string().min(1), reason: vocabularyReviewReason }),
+])) })

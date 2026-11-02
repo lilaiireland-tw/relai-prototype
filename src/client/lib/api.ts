@@ -1,5 +1,5 @@
 import { cardResponse, cardsResponse, reviewResponse, settingsResponse, starterResponse, statsResponse, vocabularyImageResponse, vocabularySaveResponse } from './product-contract'
-import type { CardFilter, CardPatch, EnglishLevel, ImageVocabularySuggestion, ReviewInput, Settings } from '../services/types'
+import type { CardFilter, CardPatch, EnglishLevel, ImageVocabularySelection, ReviewInput, Settings } from '../services/types'
 export const API_BASE_PATH = '/relaiapp/api/v1'
 
 // Only the existing Worker contract is exposed. Add paths when APIs exist.
@@ -84,7 +84,7 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
       form.append('image', file)
       return getJson('/vocabulary/image', value => vocabularyImageResponse.parse(value), form, 'POST', 60_000)
     },
-    saveVocabulary(source_item_id: string, items: ImageVocabularySuggestion[]) {
+    saveVocabulary(source_item_id: string, items: ImageVocabularySelection[]) {
       return getJson('/vocabulary/save', value => vocabularySaveResponse.parse(value), { source_item_id, items })
     },
     getSettings() { return getJson('/settings', value => settingsResponse.parse(value).settings) },

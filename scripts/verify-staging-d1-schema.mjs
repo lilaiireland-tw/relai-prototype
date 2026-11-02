@@ -53,10 +53,27 @@ const execute = (sql) => {
   }
   return responses
 }
-const verified = verifyCoreSchema(execute)
+const verified = verifyCoreSchema(execute, { requireEmpty: false })
+const foreignKeyIssues = execute('PRAGMA foreign_key_check')[0].results
+assert.deepEqual(foreignKeyIssues, [], 'Staging must not contain broken foreign keys')
+const unlinkedCards = execute(`SELECT COUNT(*) AS count FROM flashcards AS card
+  LEFT JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
+  WHERE card.card_type = 'vocabulary' AND (catalog.id IS NULL OR
+    (catalog.publication_status = 'review_needed' AND catalog.owner_user_id <> card.user_id))`)[0].results[0].count
+assert.equal(unlinkedCards, 0, 'Each vocabulary card must resolve to a visible canonical entry')
+const dataCounts = execute(`SELECT 'users' AS table_name, COUNT(*) AS count FROM users UNION ALL
+  SELECT 'source_items', COUNT(*) FROM source_items UNION ALL
+  SELECT 'flashcards', COUNT(*) FROM flashcards UNION ALL
+  SELECT 'review_events', COUNT(*) FROM review_events UNION ALL
+  SELECT 'user_stats', COUNT(*) FROM user_stats UNION ALL
+  SELECT 'user_settings', COUNT(*) FROM user_settings UNION ALL
+  SELECT 'vocabulary_catalog', COUNT(*) FROM vocabulary_catalog UNION ALL
+  SELECT 'vocabulary_catalog_sources', COUNT(*) FROM vocabulary_catalog_sources UNION ALL
+  SELECT 'user_vocabulary_items', COUNT(*) FROM user_vocabulary_items`)[0].results
 log(JSON.stringify({ account, worker: config.name, binding: db.binding,
   deployment: active.id, versions: active.versions,
   database: info.name, tables: verified.tables, indexes: verified.indexes,
   history: execute('SELECT id, name, applied_at FROM d1_migrations ORDER BY id')[0].results,
-  verification: 'Exact PRD columns/defaults/keys, required indexes/uniqueness, empty tables and committed migration history verified; all queries read-only.',
+  dataCounts, linkedVocabularyCards: true,
+  verification: 'Exact PRD columns/defaults/keys, required indexes/uniqueness, migration history, foreign keys and canonical card links verified; all queries read-only.',
 }, null, 2))

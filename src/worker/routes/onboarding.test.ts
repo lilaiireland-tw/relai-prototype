@@ -86,9 +86,10 @@ describe('initial CEFR-J onboarding API', () => {
   }
   const addCatalog = (sqlite: DatabaseSync, id: string, headword: string, level: string, pos = 'noun') => {
     sqlite.prepare(`INSERT INTO vocabulary_catalog
-      (id, headword, normalized_key, part_of_speech, cefr_level, source_dataset,
-       source_version, provenance, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, '1.6', ?, ?, ?)`).run(id, headword, headword.toLowerCase(), pos, level,
+      (id, headword, normalized_key, part_of_speech, part_of_speech_key, sense_key, semantic_sense,
+       cefr_level, source_dataset, source_version, provenance, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'fixture sense', ?, ?, '1.6', ?, ?, ?)`).run(id, headword,
+      headword.toLowerCase(), pos, pos.toLowerCase(), `fixture:${id}`, level,
       fixture.dataset, fixture.provenance, now, now)
   }
   const cardRows = (sqlite: DatabaseSync, userId: string) => sqlite.prepare(`SELECT catalog.headword AS front_content,
@@ -96,10 +97,10 @@ describe('initial CEFR-J onboarding API', () => {
       'CEFR-J ' || catalog.cefr_level || COALESCE(' · ' || catalog.part_of_speech, '')) ||
       COALESCE(char(10) || catalog.zh_tw_example_translation, '') AS back_content,
     catalog.part_of_speech, catalog.zh_tw_definition, card.vocabulary_catalog_id,
-    card.vocabulary_key, catalog.source_dataset || ' ' || catalog.source_version AS source,
+    catalog.source_dataset || ' ' || catalog.source_version AS source,
     catalog.irish_usage
     FROM flashcards AS card JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
-    WHERE card.user_id = ? ORDER BY card.vocabulary_key`).all(userId)
+    WHERE card.user_id = ? ORDER BY card.vocabulary_catalog_id`).all(userId)
 
   async function createSession(userId: string, mustChangePassword = false) {
     await sessions.users.create({ id: userId, username: userId, display_name: userId,
@@ -153,9 +154,9 @@ describe('initial CEFR-J onboarding API', () => {
       sqlite.prepare("UPDATE user_stats SET total_cards_created = 200 WHERE user_id = 'owner'").run()
       for (let index = start; index < end; index++) {
         sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type,
-          vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
-          VALUES (?, 'owner', 'vocabulary', ?, ?, ?, ?)`)
-          .run(`existing-${index}`, demoFixture[index].id, demoFixture[index].headword.toLowerCase(), now, now)
+          vocabulary_catalog_id, created_at, updated_at)
+          VALUES (?, 'owner', 'vocabulary', ?, ?, ?)`)
+          .run(`existing-${index}`, demoFixture[index].id, now, now)
       }
       const created = 20 - (end - start)
       expect(await (await choose('B1', cookie)).json())
@@ -175,7 +176,7 @@ describe('initial CEFR-J onboarding API', () => {
     const cookie = await createSession('owner')
     sqlite.exec(failure === 'later insert'
       ? `CREATE TRIGGER reject_starter BEFORE INSERT ON flashcards
-          WHEN NEW.vocabulary_key = '${demoFixture[10].headword.toLowerCase()}'
+          WHEN NEW.vocabulary_catalog_id = '${demoFixture[10].id}'
           BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`
       : `CREATE TRIGGER reject_claim BEFORE INSERT ON user_settings
           BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`)
@@ -226,21 +227,21 @@ describe('initial CEFR-J onboarding API', () => {
     addCatalog(sqlite, 'other-pos', firstRow.headword, 'B1', 'other POS')
     const cookie = await createSession('owner')
     sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type,
-      vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
-      VALUES ('existing', 'owner', 'vocabulary', 'prior-level', ?, ?, ?)`).run(firstRow.headword.toLowerCase(), now, now)
+      vocabulary_catalog_id, created_at, updated_at)
+      VALUES ('existing', 'owner', 'vocabulary', 'prior-level', ?, ?)`).run(now, now)
     const first = await choose('A2', cookie)
     expect(first.status).toBe(200)
-    expect(await first.json()).toEqual({ english_level: 'A2', starter_cards_created: 19, already_selected: false })
-    expect(cardRows(sqlite, 'owner')).toHaveLength(20)
+    expect(await first.json()).toEqual({ english_level: 'A2', starter_cards_created: 20, already_selected: false })
+    expect(cardRows(sqlite, 'owner')).toHaveLength(21)
     expect(sqlite.prepare("SELECT back_content FROM flashcards WHERE id = 'existing'").get())
       .toEqual({ back_content: null })
-    expect(sqlite.prepare('SELECT COUNT(DISTINCT vocabulary_key) AS count FROM flashcards WHERE user_id = ?').get('owner'))
-      .toEqual({ count: 20 })
+    expect(sqlite.prepare('SELECT COUNT(DISTINCT vocabulary_catalog_id) AS count FROM flashcards WHERE user_id = ?').get('owner'))
+      .toEqual({ count: 21 })
     expect(sqlite.prepare('SELECT total_cards_created FROM user_stats WHERE user_id = ?').get('owner'))
-      .toEqual({ total_cards_created: 19 })
+      .toEqual({ total_cards_created: 20 })
     const second = await choose('A2', cookie)
     expect(await second.json()).toEqual({ english_level: 'A2', starter_cards_created: 0, already_selected: true })
-    expect(cardRows(sqlite, 'owner')).toHaveLength(20)
+    expect(cardRows(sqlite, 'owner')).toHaveLength(21)
     expect(cardRows(sqlite, 'owner').filter(card => card.vocabulary_catalog_id !== 'prior-level')
       .every(card => card.zh_tw_definition !== null)).toBe(true)
   })
@@ -294,7 +295,7 @@ describe('initial CEFR-J onboarding API', () => {
     expect((await choose('A2', cookie)).status).toBe(200)
     const card = cardRows(sqlite, 'owner').find(row => row.vocabulary_catalog_id === reviewed.id)!
     expect(card).toMatchObject({ front_content: reviewed.headword, part_of_speech: reviewed.part_of_speech,
-      zh_tw_definition: 'test-existing-zh', vocabulary_catalog_id: reviewed.id, vocabulary_key: reviewed.headword })
+      zh_tw_definition: 'test-existing-zh', vocabulary_catalog_id: reviewed.id })
     expect(card.back_content).toContain('test-existing-zh')
     expect(card.back_content).toContain('test-existing-example')
     expect(card.back_content).toContain('test-existing-translation')
