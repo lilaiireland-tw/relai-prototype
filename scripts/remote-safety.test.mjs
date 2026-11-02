@@ -37,9 +37,11 @@ test('local npm entry points use the credential and network isolation wrapper', 
 })
 
 test('staging and production local Workers do not bind .dev.vars secrets', async () => {
+  const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8')
+  assert.match(viteConfig, /config: config => \{\s*config\.secrets = \{ required: \[\] \} \}/)
   for (const env of ['staging', 'production']) {
     const config = await readConfig({ config: 'wrangler.jsonc', env })
-    assert.deepEqual(config.secrets, { required: [] })
+    assert.deepEqual(config.secrets, { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] })
   }
 })
 
