@@ -29,6 +29,6 @@ export interface ImageVocabularySuggestion {
 }
 export interface VocabularySaveResult {
  headword: string; status: 'saved' | 'already_saved' | 'pending'
- reason?: 'definition_missing' | 'definition_mismatch' | 'content_incomplete' | 'catalog_changed'
+ reason?: 'definition_missing' | 'definition_mismatch' | 'content_incomplete' | 'catalog_ambiguous' | 'catalog_changed'
  catalog_definition?: string | null
 }

@@ -160,6 +160,21 @@ describe('Phase 4 authenticated product UI', () => {
   await refreshAt('cards')
   expect(container.textContent).toContain('curious')
  })
+ it('shows an explicit pending message for ambiguous catalog matches', async () => {
+  await renderAt('cards')
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
+  await act(() => {
+   Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'lesson.png', { type: 'image/png' })] })
+   input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await click(button('解析圖片'))
+  vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ results: [{
+   headword: 'curious', status: 'pending', reason: 'catalog_ambiguous', catalog_definition: '好奇的',
+  }] }))
+  await click(button('儲存勾選單字'))
+  expect(container.textContent).toContain('目錄有多筆內容不同的同詞性項目')
+  expect(container.textContent).toContain('尚未建立卡片')
+ })
  it('keeps onboarding available after catalog failure and retries the same selected level', async () => {
   server.home.settings.english_level = null
   vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ user: { id: 'owner', username: 'Alex', display_name: 'Alex', role: 'user', must_change_password: false } }))

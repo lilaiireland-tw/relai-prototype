@@ -75,7 +75,8 @@ export default function ImageVocabularyCapture({ onSaved }: { onSaved: () => voi
   {pending.map(item => <p key={item.headword} className="mt-2 rounded-xl border border-amber-200 bg-white p-3 text-sm" role="status">
    {item.headword} 待確認：{item.reason === 'definition_missing' ? '目錄尚無中文釋義'
     : item.reason === 'definition_mismatch' ? '目錄釋義與圖片解析不同'
-     : item.reason === 'content_incomplete' ? '目錄缺少例句或翻譯' : '目錄內容在儲存時變更'}。
+     : item.reason === 'content_incomplete' ? '目錄缺少例句或翻譯'
+      : item.reason === 'catalog_ambiguous' ? '目錄有多筆內容不同的同詞性項目' : '目錄內容在儲存時變更'}。
    目錄釋義：{item.catalog_definition || '（空白）'}；圖片釋義：{items.find(value => value.headword === item.headword)?.zh_tw_definition}。尚未建立卡片。
   </p>)}
  </section>

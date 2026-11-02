@@ -159,6 +159,26 @@ describe('authenticated image vocabulary', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({ count: 0 })
   })
 
+  it('uses the complete same-word and same-POS catalog entry despite different Chinese wording', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const canonical = reviewed.find(row => row.headword === 'abandon')!
+    addReviewedCatalog(canonical)
+    const extracted: VocabularySuggestion = {
+      headword: canonical.headword, part_of_speech: canonical.part_of_speech,
+      zh_tw_definition: '放棄；遺棄', english_example: canonical.english_example,
+      zh_tw_example_translation: canonical.zh_tw_example_translation,
+    }
+
+    const response = await save(cookie, sourceId, [extracted])
+    expect(await response.json()).toEqual({ results: [{ headword: 'abandon', status: 'saved' }] })
+    expect(sqlite.prepare('SELECT vocabulary_catalog_id, user_vocabulary_item_id FROM flashcards').get())
+      .toEqual({ vocabulary_catalog_id: canonical.id, user_vocabulary_item_id: null })
+    expect(sqlite.prepare('SELECT zh_tw_definition FROM vocabulary_catalog WHERE id = ?').get(canonical.id))
+      .toEqual({ zh_tw_definition: canonical.zh_tw_definition })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_vocabulary_items').get()).toEqual({ count: 0 })
+  })
+
   it('saves catalog and personal entries, deduplicates, and returns persisted cards', async () => {
     const cookie = await session('owner')
     const sourceId = await sourceItem('owner')
@@ -186,6 +206,13 @@ describe('authenticated image vocabulary', () => {
     expect(await retry.json()).toEqual({ results: [
       { headword: canonical.headword, status: 'already_saved' }, { headword: 'curious', status: 'already_saved' },
     ] })
+    const otherCookie = await session('other')
+    const otherSource = await sourceItem('other')
+    expect(await (await save(otherCookie, otherSource, [catalogSuggestion])).json()).toEqual({ results: [
+      { headword: canonical.headword, status: 'saved' },
+    ] })
+    expect(sqlite.prepare('SELECT user_id, vocabulary_catalog_id FROM flashcards WHERE vocabulary_catalog_id = ? ORDER BY user_id').all(canonical.id))
+      .toEqual([{ user_id: 'other', vocabulary_catalog_id: canonical.id }, { user_id: 'owner', vocabulary_catalog_id: canonical.id }])
     const concurrent: VocabularySuggestion = { headword: 'landmark', part_of_speech: 'noun', zh_tw_definition: '地標',
       english_example: 'The landmark is easy to find.', zh_tw_example_translation: '這個地標很容易找到。' }
     const retries = await Promise.all([save(cookie, sourceId, [concurrent]), save(cookie, sourceId, [concurrent])])
@@ -205,27 +232,27 @@ describe('authenticated image vocabulary', () => {
     })
   })
 
-  it('marks missing or mismatched catalog definitions pending and isolates users', async () => {
+  it('keeps incomplete catalog entries pending and isolates users', async () => {
     const ownerCookie = await session('owner')
     const otherCookie = await session('other')
     const ownerSource = await sourceItem('owner')
     const otherSource = await sourceItem('other')
-    const canonical = reviewed[1]
     const missingDefinition = reviewed[2]
-    addReviewedCatalog(canonical)
+    const incompleteContent = reviewed[3]
     addReviewedCatalog(missingDefinition)
+    addReviewedCatalog(incompleteContent)
     sqlite.prepare('UPDATE vocabulary_catalog SET zh_tw_definition = NULL WHERE id = ?').run(missingDefinition.id)
-    const mismatch: VocabularySuggestion = {
-      headword: canonical.headword, part_of_speech: canonical.part_of_speech,
-      zh_tw_definition: 'different meaning', english_example: 'A sentence.', zh_tw_example_translation: '翻譯。',
-    }
+    sqlite.prepare('UPDATE vocabulary_catalog SET english_example = NULL WHERE id = ?').run(incompleteContent.id)
     const noDefinition: VocabularySuggestion = { headword: missingDefinition.headword,
       part_of_speech: missingDefinition.part_of_speech, zh_tw_definition: missingDefinition.zh_tw_definition,
       english_example: missingDefinition.english_example, zh_tw_example_translation: missingDefinition.zh_tw_example_translation }
-    const pending = await save(ownerCookie, ownerSource, [mismatch, noDefinition])
+    const incomplete: VocabularySuggestion = { headword: incompleteContent.headword,
+      part_of_speech: incompleteContent.part_of_speech, zh_tw_definition: incompleteContent.zh_tw_definition,
+      english_example: incompleteContent.english_example, zh_tw_example_translation: incompleteContent.zh_tw_example_translation }
+    const pending = await save(ownerCookie, ownerSource, [noDefinition, incomplete])
     expect(await pending.json()).toEqual({ results: [
-      { headword: canonical.headword, status: 'pending', reason: 'definition_mismatch', catalog_definition: canonical.zh_tw_definition },
       { headword: missingDefinition.headword, status: 'pending', reason: 'definition_missing', catalog_definition: null },
+      { headword: incompleteContent.headword, status: 'pending', reason: 'content_incomplete', catalog_definition: incompleteContent.zh_tw_definition },
     ] })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
     expect((await save(otherCookie, ownerSource, [suggestion])).status).toBe(404)
@@ -235,6 +262,37 @@ describe('authenticated image vocabulary', () => {
     expect((await second.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(sqlite.prepare('SELECT user_id, COUNT(*) AS count FROM flashcards GROUP BY user_id ORDER BY user_id').all())
       .toEqual([{ user_id: 'other', count: 1 }, { user_id: 'owner', count: 1 }])
+  })
+
+  it('uses a personal item rather than associating a same-headword catalog row with the wrong POS', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    addReviewedCatalog({ ...reviewed[0], id: 'wrong-pos', headword: suggestion.headword, part_of_speech: 'noun' })
+
+    const response = await save(cookie, sourceId, [suggestion])
+    expect(await response.json()).toEqual({ results: [{ headword: suggestion.headword, status: 'saved' }] })
+    expect(sqlite.prepare('SELECT vocabulary_catalog_id, user_vocabulary_item_id FROM flashcards').get())
+      .toMatchObject({ vocabulary_catalog_id: null, user_vocabulary_item_id: expect.any(String) })
+    expect(sqlite.prepare('SELECT part_of_speech FROM user_vocabulary_items WHERE user_id = ?').get('owner'))
+      .toEqual({ part_of_speech: suggestion.part_of_speech })
+  })
+
+  it('keeps conflicting complete same-word and same-POS catalog entries pending', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const canonical = reviewed.find(row => row.headword === 'abandon')!
+    addReviewedCatalog(canonical)
+    addReviewedCatalog({ ...canonical, id: 'alternate-abandon', cefr_level: 'B2', zh_tw_definition: '另一個釋義' })
+
+    const response = await save(cookie, sourceId, [{
+      headword: canonical.headword, part_of_speech: canonical.part_of_speech,
+      zh_tw_definition: '放棄；遺棄', english_example: canonical.english_example,
+      zh_tw_example_translation: canonical.zh_tw_example_translation,
+    }])
+    expect(await response.json()).toEqual({ results: [{
+      headword: canonical.headword, status: 'pending', reason: 'catalog_ambiguous', catalog_definition: '另一個釋義',
+    }] })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
   })
 
   it('rolls back personal vocabulary if its flashcard cannot be created', async () => {

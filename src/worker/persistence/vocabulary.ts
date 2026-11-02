@@ -12,7 +12,7 @@ interface CatalogItem {
 type SaveResult = {
   headword: string
   status: 'saved' | 'already_saved' | 'pending'
-  reason?: 'definition_missing' | 'definition_mismatch' | 'content_incomplete' | 'catalog_changed'
+  reason?: 'definition_missing' | 'definition_mismatch' | 'content_incomplete' | 'catalog_ambiguous' | 'catalog_changed'
   catalog_definition?: string | null
 }
 interface PlannedSave {
@@ -20,10 +20,6 @@ interface PlannedSave {
   key: string
   catalog: CatalogItem | null
   resultIndex: number
-}
-
-function compareDefinition(left: string, right: string) {
-  return left === right
 }
 
 export async function saveVocabulary(
@@ -47,22 +43,28 @@ export async function saveVocabulary(
       results.push({ headword: item.headword, status: 'already_saved' })
       continue
     }
-    const catalog = await db.prepare(`SELECT id, normalized_key, part_of_speech, zh_tw_definition,
-        english_example, zh_tw_example_translation FROM vocabulary_catalog
-        WHERE normalized_key = ? ORDER BY CASE WHEN part_of_speech = ? THEN 0 ELSE 1 END,
-          CASE WHEN zh_tw_definition = ? THEN 0 ELSE 1 END,
-          CASE WHEN zh_tw_definition IS NOT NULL AND english_example IS NOT NULL
-            AND zh_tw_example_translation IS NOT NULL THEN 0 ELSE 1 END, id LIMIT 1`)
-      .bind(key, item.part_of_speech, item.zh_tw_definition).first<CatalogItem>()
-    if (catalog) {
-      const pending = !catalog.zh_tw_definition?.trim() ? 'definition_missing'
-        : !compareDefinition(catalog.zh_tw_definition, item.zh_tw_definition) ? 'definition_mismatch'
-          : !catalog.english_example?.trim() || !catalog.zh_tw_example_translation?.trim() ? 'content_incomplete' : null
-      if (pending) {
-        results.push({ headword: item.headword, status: 'pending', reason: pending,
-          catalog_definition: catalog.zh_tw_definition })
+    const matches = await db.prepare(`SELECT id, normalized_key, part_of_speech, zh_tw_definition,
+        english_example, zh_tw_example_translation FROM vocabulary_catalog WHERE normalized_key = ? ORDER BY id`)
+      .bind(key).all<CatalogItem>()
+    if (!matches.success) throw new Error('Could not inspect vocabulary catalog matches.')
+    const partOfSpeechMatches = matches.results.filter(match => match.part_of_speech === item.part_of_speech)
+    let catalog: CatalogItem | null = null
+    if (partOfSpeechMatches.length) {
+      const complete = partOfSpeechMatches.filter(match => match.zh_tw_definition?.trim() &&
+        match.english_example?.trim() && match.zh_tw_example_translation?.trim())
+      if (!complete.length) {
+        results.push({ headword: item.headword, status: 'pending',
+          reason: partOfSpeechMatches.some(match => !match.zh_tw_definition?.trim()) ? 'definition_missing' : 'content_incomplete',
+          catalog_definition: partOfSpeechMatches[0].zh_tw_definition })
         continue
       }
+      if (new Set(complete.map(({ zh_tw_definition, english_example, zh_tw_example_translation }) =>
+        JSON.stringify([zh_tw_definition, english_example, zh_tw_example_translation]))).size > 1) {
+        results.push({ headword: item.headword, status: 'pending', reason: 'catalog_ambiguous',
+          catalog_definition: complete[0].zh_tw_definition })
+        continue
+      }
+      catalog = complete[0]
     }
     planned.push({ item, key, catalog, resultIndex: results.length })
     results.push({ headword: item.headword, status: 'pending' })
@@ -77,9 +79,10 @@ export async function saveVocabulary(
       statements.push(db.prepare(`INSERT INTO flashcards (id, user_id, source_item_id, card_type,
         vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
         SELECT ?, ?, ?, 'vocabulary', id, normalized_key, ?, ? FROM vocabulary_catalog
-        WHERE id = ? AND zh_tw_definition = ? AND NULLIF(TRIM(english_example), '') IS NOT NULL
+        WHERE id = ? AND normalized_key = ? AND part_of_speech = ?
+          AND NULLIF(TRIM(zh_tw_definition), '') IS NOT NULL AND NULLIF(TRIM(english_example), '') IS NOT NULL
           AND NULLIF(TRIM(zh_tw_example_translation), '') IS NOT NULL ON CONFLICT DO NOTHING`)
-        .bind(crypto.randomUUID(), userId, sourceItemId, at, at, catalog.id, catalog.zh_tw_definition))
+        .bind(crypto.randomUUID(), userId, sourceItemId, at, at, catalog.id, key, item.part_of_speech))
     } else {
       statements.push(db.prepare(`INSERT INTO user_vocabulary_items (id, user_id, headword, normalized_key,
         part_of_speech, zh_tw_definition, english_example, zh_tw_example_translation, source, created_at, updated_at)

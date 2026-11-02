@@ -32,6 +32,6 @@ export const vocabularyImageResponse = z.strictObject({
 })
 export const vocabularySaveResponse = z.strictObject({ results: z.array(z.strictObject({
  headword: z.string(), status: z.enum(['saved', 'already_saved', 'pending']),
- reason: z.enum(['definition_missing', 'definition_mismatch', 'content_incomplete', 'catalog_changed']).optional(),
+ reason: z.enum(['definition_missing', 'definition_mismatch', 'content_incomplete', 'catalog_ambiguous', 'catalog_changed']).optional(),
  catalog_definition: z.string().nullable().optional(),
 })) })
