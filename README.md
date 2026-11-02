@@ -83,8 +83,9 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - 卡片、複習、統計與設定的 D1 repository 與 authenticated API：已完成；前端已整合篩選、收藏、內容編輯、確認刪除與明確完成複習，首頁／統計／設定使用真實資料。
 - CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入尚未執行。
 - CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
-- 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 從共用目錄複製最多 100 張同級別卡片，並保護重試與重複字詞；已選級別不再顯示 onboarding。行為見 [starter API](docs/onboarding-starter-api.md)。
-- 後續階段：Gemini 擷取及 PWA／離線支援。
+- 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 保留所選級別，並為每種選擇加入相同的 20 張已審核 B1 範例卡；重試不重複建立。行為見 [starter API](docs/onboarding-starter-api.md)。
+- 圖片單字擷取原型：已加入 Worker 端 Gemini 圖片解析與勾選儲存；API key 使用 `GEMINI_API_KEY` Worker secret，並可用 `GEMINI_MODEL` 選擇已驗證的圖片模型（預設 `gemini-3.8-flash`）。只保存來源 metadata，不保存圖片本身；單字使用共用目錄或使用者個人 vocabulary 表。
+- 後續階段：PWA／離線支援。
 
 Cards API 的 `needs_review` 僅接受 `true`（從未複習或超過七天未複習）；省略表示不套用此篩選，`false` 回傳 400。卡片 PATCH 僅允許學習內容欄位；Error Log 的錯誤類型使用既有 `part_of_speech` 儲存欄位。複習由明確完成動作提交，具備事件冪等性與 D1 batch transaction；設定級別變更不刪除卡片或新增 starter pack。
 

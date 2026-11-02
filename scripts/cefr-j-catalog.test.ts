@@ -2,9 +2,10 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { CatalogImportError, DATASET, importCatalog, normalizeKey, validateManifest, type CatalogDatabase, type CatalogStatement } from './cefr-j-catalog'
+import { CatalogImportError, DATASET, importCatalog, importReviewedDemo, normalizeKey, validateManifest, type CatalogDatabase, type CatalogStatement } from './cefr-j-catalog'
 
 const fixture = JSON.parse(readFileSync('scripts/fixtures/cefr-j-1.6-small.json', 'utf8'))
+const reviewedDemo = JSON.parse(readFileSync('data/ai-enrichment/b1-sample-20.json', 'utf8'))
 
 function localDatabase() {
   const sqlite = new DatabaseSync(':memory:')
@@ -42,6 +43,36 @@ function localDatabase() {
 }
 
 describe('CEFR-J catalog import', () => {
+  it('imports the approved 20-card enrichment by deterministic identity and fills only missing content', async () => {
+    const { sqlite, db } = localDatabase()
+    expect(await importReviewedDemo(db, reviewedDemo)).toEqual({ inserted: 20, enriched: 0, unchanged: 0 })
+    const first = reviewedDemo[0]
+    sqlite.prepare('UPDATE vocabulary_catalog SET zh_tw_definition = ?, english_example = NULL WHERE id = ?')
+      .run('existing canonical definition', first.id)
+    expect(await importReviewedDemo(db, reviewedDemo)).toEqual({ inserted: 0, enriched: 1, unchanged: 19 })
+    expect(sqlite.prepare(`SELECT id, headword, normalized_key, part_of_speech, cefr_level, source_dataset,
+      source_version, provenance, zh_tw_definition, english_example, zh_tw_example_translation
+      FROM vocabulary_catalog WHERE id = ?`).get(first.id)).toMatchObject({
+      id: first.id, headword: first.headword, normalized_key: first.headword, part_of_speech: first.part_of_speech,
+      cefr_level: 'B1', source_dataset: DATASET, source_version: '1.6', provenance: fixture.provenance,
+      zh_tw_definition: 'existing canonical definition', english_example: first.english_example,
+      zh_tw_example_translation: first.zh_tw_example_translation,
+    })
+    expect(await importReviewedDemo(db, reviewedDemo)).toEqual({ inserted: 0, enriched: 0, unchanged: 20 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
+    sqlite.close()
+  })
+
+  it('rejects altered or incomplete reviewed fixture data before writing', async () => {
+    const { sqlite, db } = localDatabase()
+    const altered = structuredClone(reviewedDemo)
+    altered[0].id = 'invented-id'
+    await expect(importReviewedDemo(db, altered)).rejects.toThrow(/identity/)
+    await expect(importReviewedDemo(db, reviewedDemo.slice(0, 19))).rejects.toThrow(/exactly 20/)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog').get()).toEqual({ count: 0 })
+    sqlite.close()
+  })
+
   it('imports A1–B2 fixture, keeps POS and provenance, and is idempotent without creating cards', async () => {
     const { sqlite, db } = localDatabase()
     expect(await importCatalog(db, fixture)).toEqual({ inserted: 8, skipped: 0, rejected: 0 })

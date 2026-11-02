@@ -6,6 +6,7 @@ import { cards } from './cards'
 import { reviews } from './reviews'
 import { stats } from './stats'
 import { settings } from './settings'
+import { vocabulary } from './vocabulary'
 import type { AuthEnv } from '../auth/types'
 
 export const api = new Hono<AuthEnv>()
@@ -17,3 +18,4 @@ api.route('/cards', cards)
 api.route('/reviews', reviews)
 api.route('/stats', stats)
 api.route('/settings', settings)
+api.route('/vocabulary', vocabulary)

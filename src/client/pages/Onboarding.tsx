@@ -26,7 +26,7 @@ export default function Onboarding() {
  }
  return <main className="flex flex-1 flex-col px-8 pb-10 pt-10">
   <h1 className="text-2xl font-semibold">選擇你的英文級別</h1>
-  <p className="mt-3 text-sm leading-relaxed text-text-secondary">選擇 A1、A2、B1 或 B2，取得該級別的第一組 CEFR-J 起始單字卡，開始複習。</p>
+  <p className="mt-3 text-sm leading-relaxed text-text-secondary">選擇 A1、A2、B1 或 B2，儲存你的學習級別，並取得 20 張精選 CEFR-J 單字卡。</p>
   <form onSubmit={submit} className="mt-8 flex flex-col gap-4">
    <fieldset disabled={busy} className="grid grid-cols-2 gap-3"><legend className="mb-3 text-sm">英文級別</legend>
     {ENGLISH_LEVELS.map(value => <label key={value} className="flex items-center gap-3 rounded-xl border border-gray-200 bg-card-gray p-4">

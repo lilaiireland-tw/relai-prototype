@@ -6,13 +6,14 @@ import { useClientData } from '../services/useClientData'
 import type { CardFilter, CardPatch, Flashcard, StatsSummary } from '../services/types'
 import CardContent from './CardContent'
 import DataState from './DataState'
+import ImageVocabularyCapture from './ImageVocabularyCapture'
 
 const filters: { value: CardFilter; label: string }[] = [
  { value: 'all', label: '全部' }, { value: 'vocabulary', label: 'Vocabulary' },
  { value: 'error_log', label: 'Error Log' }, { value: 'favorites', label: '收藏' },
  { value: 'needs_review', label: '需要複習' },
 ]
-export default function CardsPage({ initialFilter, title }: { initialFilter: CardFilter; title: string }) {
+export default function CardsPage({ initialFilter, title, captureVocabulary = false }: { initialFilter: CardFilter; title: string; captureVocabulary?: boolean }) {
  const [filter, setFilter] = useState(initialFilter)
  const load = useCallback(() => clientData.listCards(filter), [filter])
  const { data, loading, error, reload, setData } = useClientData(load)
@@ -36,6 +37,7 @@ export default function CardsPage({ initialFilter, title }: { initialFilter: Car
    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-irish-green transition-all" style={{ width: `${card ? (position + 1) / cards.length * 100 : 0}%` }} /></div>
    <DataState loading={loading} error={error} retry={reload} />
   </div>
+  {captureVocabulary && <ImageVocabularyCapture onSaved={reload} />}
   {card ? <CardViewer key={`${filter}:${card.id}:${index}`} card={card} reload={reload} next={() => setIndex(value => value + 1)} /> : !loading && !error &&
    <div className="m-5 rounded-2xl border border-dashed border-gray-200 px-6 py-10 text-center text-sm text-text-secondary">目前沒有{filter === 'vocabulary' ? ' vocabulary' : filter === 'error_log' ? ' error log' : '符合篩選的'} 卡片。</div>}
  </div>

@@ -1,10 +1,11 @@
-import { cardResponse, cardsResponse, reviewResponse, settingsResponse, starterResponse, statsResponse } from './product-contract'
-import type { CardFilter, CardPatch, EnglishLevel, ReviewInput, Settings } from '../services/types'
+import { cardResponse, cardsResponse, reviewResponse, settingsResponse, starterResponse, statsResponse, vocabularyImageResponse, vocabularySaveResponse } from './product-contract'
+import type { CardFilter, CardPatch, EnglishLevel, ImageVocabularySuggestion, ReviewInput, Settings } from '../services/types'
 export const API_BASE_PATH = '/relaiapp/api/v1'
 
 // Only the existing Worker contract is exposed. Add paths when APIs exist.
 type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout' | '/auth/change-password' |
- '/onboarding/level' | '/settings' | '/stats/summary' | '/reviews' | '/cards' | `/cards?${string}` | `/cards/${string}`
+ '/onboarding/level' | '/settings' | '/stats/summary' | '/reviews' | '/cards' | `/cards?${string}` | `/cards/${string}` |
+ '/vocabulary/image' | '/vocabulary/save'
 export function apiUrl(path: ApiPath): string {
   return `${API_BASE_PATH}${path}`
 }
@@ -40,7 +41,7 @@ export class ApiError extends Error {
 
 export function createApiClient(transport: typeof fetch = (...args) => globalThis.fetch(...args)) {
   const unauthorizedListeners = new Set<() => void>()
-  async function request(path: ApiPath, body?: object, method = body || path === '/auth/logout' ? 'POST' : 'GET'): Promise<Response> {
+  async function request(path: ApiPath, body?: object | FormData, method = body || path === '/auth/logout' ? 'POST' : 'GET', timeout = 10_000): Promise<Response> {
     let response: Response
     try {
       response = await transport(apiUrl(path), {
@@ -48,10 +49,10 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
         mode: 'same-origin',
         // The browser exclusively manages the HttpOnly session cookie.
         credentials: 'same-origin',
-        headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
-        ...(body ? { body: JSON.stringify(body) } : {}),
+        headers: { Accept: 'application/json', ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
         cache: 'no-store',
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(timeout),
       })
     } catch {
       throw new ApiError('network', '無法連線至服務，請稍後再試。')
@@ -64,8 +65,8 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     }
     return response
   }
-  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: object, method?: string): Promise<T> {
-    const response = await request(path, body, method)
+  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: object | FormData, method?: string, timeout?: number): Promise<T> {
+    const response = await request(path, body, method, timeout)
     try {
       const value: unknown = await response.json()
       return decode(value)
@@ -77,6 +78,14 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
   return {
     selectLevel(english_level: EnglishLevel) {
       return getJson('/onboarding/level', value => starterResponse.parse(value), { english_level })
+    },
+    extractImageVocabulary(file: File) {
+      const form = new FormData()
+      form.append('image', file)
+      return getJson('/vocabulary/image', value => vocabularyImageResponse.parse(value), form, 'POST', 60_000)
+    },
+    saveVocabulary(source_item_id: string, items: ImageVocabularySuggestion[]) {
+      return getJson('/vocabulary/save', value => vocabularySaveResponse.parse(value), { source_item_id, items })
     },
     getSettings() { return getJson('/settings', value => settingsResponse.parse(value).settings) },
     updateSettings(input: Partial<Settings>) {
