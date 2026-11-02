@@ -30,6 +30,7 @@ test('core schema and password-change state match approved migrations on clean l
   assert.match(applied, /0001_initial_core_schema.sql/)
   assert.match(applied, /0002_add_users_must_change_password.sql/)
   assert.match(applied, /0003_add_cefr_j_vocabulary_foundation.sql/)
+  assert.match(applied, /0004_normalize_vocabulary_ownership.sql/)
 
   const metadata = new Map()
   const { schema: initialSchema, history } = verifyCoreSchema((sql) => {
@@ -64,7 +65,7 @@ test('core schema and password-change state match approved migrations on clean l
   assert.deepEqual(query('SELECT name FROM d1_migrations ORDER BY id'), history)
 })
 
-test('CEFR-J catalog, level state and personal vocabulary identities enforce Issue #63 rules', () => {
+test('catalog and personal vocabulary ownership stay normalized, isolated and deduplicated', () => {
   const db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys = ON')
   for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()) {
@@ -98,17 +99,57 @@ test('CEFR-J catalog, level state and personal vocabulary identities enforce Iss
   assert.throws(() => settings.run('user-C2', 'C2'), /CHECK/)
 
   const addCard = db.prepare(`INSERT INTO flashcards
-    (id, user_id, card_type, front_content, back_content, created_at, updated_at,
-      vocabulary_catalog_id, vocabulary_key)
-    VALUES (?, ?, 'vocabulary', 'Book', 'book', '2026-10-01', '2026-10-01', ?, ?)`)
+    (id, user_id, card_type, created_at, updated_at, vocabulary_catalog_id, vocabulary_key)
+    VALUES (?, ?, 'vocabulary', '2026-10-01', '2026-10-01', ?, ?)`)
   addCard.run('card-a', 'one', 'cat-a', 'book')
   assert.throws(() => addCard.run('retry', 'one', 'cat-a', 'different'), /UNIQUE/)
-  assert.throws(() => addCard.run('ai-duplicate', 'one', null, 'book'), /UNIQUE/)
+  assert.throws(() => addCard.run('wrong-key', 'three', 'cat-a', 'other'), /FOREIGN KEY/)
+  db.prepare(`INSERT INTO user_vocabulary_items (id, user_id, headword, normalized_key, created_at, updated_at)
+    VALUES ('personal-book', 'one', 'Book', 'book', '2026-10-01', '2026-10-01')`).run()
+  assert.throws(() => db.prepare(`INSERT INTO flashcards (id, user_id, card_type, created_at, updated_at,
+    user_vocabulary_item_id, vocabulary_key) VALUES ('ai-duplicate', 'one', 'vocabulary',
+    '2026-10-01', '2026-10-01', 'personal-book', 'book')`).run(), /UNIQUE/)
+  assert.throws(() => db.prepare(`INSERT INTO flashcards (id, user_id, card_type, created_at, updated_at,
+    user_vocabulary_item_id, vocabulary_key) VALUES ('cross-user', 'two', 'vocabulary',
+    '2026-10-01', '2026-10-01', 'personal-book', 'book')`).run(), /FOREIGN KEY/)
   addCard.run('card-b', 'two', 'cat-a', 'book')
   assert.throws(() => addCard.run('missing-catalog', 'three', 'missing', 'other'), /FOREIGN KEY/)
+  assert.throws(() => db.prepare(`INSERT INTO user_vocabulary_items
+    (id, user_id, headword, normalized_key, created_at, updated_at)
+    VALUES ('duplicate-personal', 'one', 'BOOK', 'book', '2026-10-01', '2026-10-01')`).run(), /UNIQUE/)
   assert.throws(() => db.prepare(`INSERT INTO flashcards
     (id, user_id, card_type, front_content, back_content, created_at, updated_at, vocabulary_catalog_id)
     VALUES ('wrong-type', 'three', 'error_log', 'x', 'x', '2026-10-01', '2026-10-01', 'cat-a')`).run(), /CHECK/)
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM flashcards').get().count, 2)
+  db.prepare("UPDATE flashcards SET is_favorite = 1, last_reviewed_at = '2026-10-02' WHERE id = 'card-a'").run()
+  assert.equal(db.prepare("SELECT is_favorite FROM flashcards WHERE id = 'card-b'").get().is_favorite, 0)
+  db.prepare("DELETE FROM flashcards WHERE id = 'card-a'").run()
+  assert.equal(db.prepare("SELECT headword FROM vocabulary_catalog WHERE id = 'cat-a'").get().headword, 'Book')
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM flashcards WHERE id = 'card-b'").get().count, 1)
+  db.prepare(`INSERT INTO flashcards
+    (id, user_id, card_type, front_content, back_content, created_at, updated_at)
+    VALUES ('personal-error', 'one', 'error_log', 'wrong', 'right', '2026-10-01', '2026-10-01')`).run()
+  assert.equal(db.prepare("SELECT card_type FROM flashcards WHERE id = 'personal-error'").get().card_type, 'error_log')
+  db.close()
+})
+
+test('normalization migration discards disposable learning state without backfilling cards', () => {
+  const db = new DatabaseSync(':memory:')
+  db.exec('PRAGMA foreign_keys = ON')
+  for (const name of readdirSync('migrations').filter(name => name.endsWith('.sql')).sort().slice(0, 3)) {
+    db.exec(readFileSync(join('migrations', name), 'utf8'))
+  }
+  db.exec(`INSERT INTO user_settings (user_id, timezone, created_at, updated_at, english_level)
+    VALUES ('owner', 'UTC', '2026-10-01', '2026-10-01', 'A1');
+    INSERT INTO user_stats (user_id, updated_at) VALUES ('owner', '2026-10-01');
+    INSERT INTO flashcards (id, user_id, card_type, front_content, back_content, created_at, updated_at)
+      VALUES ('old-card', 'owner', 'vocabulary', 'old', 'old content', '2026-10-01', '2026-10-01');
+    INSERT INTO review_events (id, client_event_id, user_id, card_id, review_result, reviewed_at, created_at)
+      VALUES ('review', 'event', 'owner', 'old-card', 'viewed', '2026-10-01', '2026-10-01');`)
+  db.exec(readFileSync(join('migrations', '0004_normalize_vocabulary_ownership.sql'), 'utf8'))
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM flashcards').get().count, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM review_events').get().count, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM user_stats').get().count, 0)
+  assert.equal(db.prepare("SELECT english_level FROM user_settings WHERE user_id = 'owner'").get().english_level, null)
   db.close()
 })

@@ -25,3 +25,10 @@ schema through unrecorded Dashboard SQL.
 
 See [D1 migration workflow](../docs/d1-migrations.md) for exact local/staging
 commands, production release steps, and safety rules.
+
+`0004_normalize_vocabulary_ownership.sql` makes catalog-backed flashcards
+reference catalog content, adds the user-owned `user_vocabulary_items` source,
+and leaves Error Log content on user-owned cards. It deletes prototype flashcards,
+review events and stats and clears selected levels instead of backfilling; a
+separate approved staging operation is required before any remote application.
+The migration does not seed catalog data or personal vocabulary.

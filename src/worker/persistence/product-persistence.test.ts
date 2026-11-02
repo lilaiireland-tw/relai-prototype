@@ -22,23 +22,21 @@ function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
 const at = '2026-09-29T10:00:00.000Z'
 const later = '2026-09-29T11:00:00.000Z'
 const old = '2026-09-20T10:00:00.000Z'
-const card = (id: string, userId: string, createdAt = at) => ({
-  id, user_id: userId, source_item_id: null, card_type: 'vocabulary',
-  front_content: `front-${id}`, back_content: 'back', part_of_speech: null,
-  zh_tw_definition: null, explanation: null, irish_usage: null, source: null,
-  is_favorite: 0, last_reviewed_at: null, next_review_at: null,
-  created_at: createdAt, updated_at: createdAt,
-})
-
 describe('product persistence with local SQLite D1 transport', () => {
   let sqlite: DatabaseSync
   let repos: ReturnType<typeof createRepositories>
-  const addCard = (id: string, userId: string, createdAt = at) => {
-    const row = card(id, userId, createdAt)
-    sqlite.prepare(`INSERT INTO flashcards (id, user_id, source_item_id, card_type, front_content,
-      back_content, part_of_speech, zh_tw_definition, explanation, irish_usage, source, is_favorite,
-      last_reviewed_at, next_review_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...Object.values(row))
+  const addCard = (id: string, userId: string, createdAt = at, type: 'vocabulary' | 'error_log' = 'vocabulary') => {
+    if (type === 'vocabulary') {
+      sqlite.prepare(`INSERT INTO user_vocabulary_items (id, user_id, headword, normalized_key, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(`item-${id}`, userId, `front-${id}`, id, createdAt, createdAt)
+      sqlite.prepare(`INSERT INTO flashcards
+        (id, user_id, card_type, user_vocabulary_item_id, vocabulary_key, created_at, updated_at)
+        VALUES (?, ?, 'vocabulary', ?, ?, ?, ?)`).run(id, userId, `item-${id}`, id, createdAt, createdAt)
+    } else {
+      sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
+        created_at, updated_at) VALUES (?, ?, 'error_log', ?, 'back', ?, ?)`)
+        .run(id, userId, `front-${id}`, createdAt, createdAt)
+    }
   }
 
   beforeEach(() => {
@@ -59,7 +57,9 @@ describe('product persistence with local SQLite D1 transport', () => {
     expect(await repos.flashcards.setFavorite('one', 'b', true, later)).toBeNull()
     expect(await repos.flashcards.recordReview('one', 'b', later)).toEqual({ changes: 0 })
     expect(await repos.flashcards.find('two', 'b')).toMatchObject({ front_content: 'front-b', is_favorite: false })
-    expect(await repos.flashcards.update('one', 'a', { front_content: 'new', explanation: 'note' }, later))
+    expect(await repos.flashcards.update('one', 'a', { front_content: 'new' }, later)).toBeNull()
+    addCard('error', 'one', at, 'error_log')
+    expect(await repos.flashcards.update('one', 'error', { front_content: 'new', explanation: 'note' }, later))
       .toMatchObject({ front_content: 'new', explanation: 'note', updated_at: later })
     expect(await repos.flashcards.setFavorite('one', 'a', true, later)).toMatchObject({ is_favorite: true })
     expect(await repos.flashcards.toggleFavorite('one', 'a', later)).toMatchObject({ is_favorite: false })
@@ -71,9 +71,9 @@ describe('product persistence with local SQLite D1 transport', () => {
   })
 
   it('filters type, favorite and seven-day needs-review and bounds cursor pages', async () => {
-    addCard('a', 'one'); addCard('b', 'one'); addCard('c', 'one', old); addCard('d', 'two')
-    sqlite.prepare('UPDATE flashcards SET card_type = ?, is_favorite = ?, last_reviewed_at = ? WHERE id = ?')
-      .run('error_log', 1, old, 'b')
+    addCard('a', 'one'); addCard('b', 'one', at, 'error_log'); addCard('c', 'one', old); addCard('d', 'two')
+    sqlite.prepare('UPDATE flashcards SET is_favorite = ?, last_reviewed_at = ? WHERE id = ?')
+      .run(1, old, 'b')
     sqlite.prepare('UPDATE flashcards SET last_reviewed_at = ? WHERE id = ?').run(later, 'c')
     expect((await repos.flashcards.list('one', { cardType: 'error_log' })).cards.map(row => row.id)).toEqual(['b'])
     expect((await repos.flashcards.list('one', { favorite: true })).cards.map(row => row.id)).toEqual(['b'])

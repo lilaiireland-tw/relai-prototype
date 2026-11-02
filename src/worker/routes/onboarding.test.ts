@@ -86,9 +86,15 @@ describe('initial CEFR-J onboarding API', () => {
       VALUES (?, ?, ?, ?, ?, ?, '1.6', ?, ?, ?)`).run(id, headword, headword.toLowerCase(), pos, level,
       fixture.dataset, fixture.provenance, now, now)
   }
-  const cardRows = (sqlite: DatabaseSync, userId: string) => sqlite.prepare(`SELECT front_content, back_content,
-    part_of_speech, zh_tw_definition, vocabulary_catalog_id, vocabulary_key, source
-    FROM flashcards WHERE user_id = ? ORDER BY vocabulary_key`).all(userId)
+  const cardRows = (sqlite: DatabaseSync, userId: string) => sqlite.prepare(`SELECT catalog.headword AS front_content,
+    COALESCE(catalog.zh_tw_definition || char(10), '') || COALESCE(catalog.english_example,
+      'CEFR-J ' || catalog.cefr_level || COALESCE(' · ' || catalog.part_of_speech, '')) ||
+      COALESCE(char(10) || catalog.zh_tw_example_translation, '') AS back_content,
+    catalog.part_of_speech, catalog.zh_tw_definition, card.vocabulary_catalog_id,
+    card.vocabulary_key, catalog.source_dataset || ' ' || catalog.source_version AS source,
+    catalog.irish_usage
+    FROM flashcards AS card JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
+    WHERE card.user_id = ? ORDER BY card.vocabulary_key`).all(userId)
 
   async function createSession(userId: string, mustChangePassword = false) {
     await sessions.users.create({ id: userId, username: userId, display_name: userId,
@@ -145,9 +151,9 @@ describe('initial CEFR-J onboarding API', () => {
       await sessions.userStats.getOrCreate('owner', now)
       sqlite.prepare("UPDATE user_stats SET total_cards_created = 200 WHERE user_id = 'owner'").run()
       for (let index = start; index < end; index++) {
-        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
+        sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type,
           vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
-          VALUES (?, 'owner', 'vocabulary', 'existing', 'keep me', ?, ?, ?, ?)`)
+          VALUES (?, 'owner', 'vocabulary', ?, ?, ?, ?)`)
           .run(`existing-${index}`, `full-${index}`, `word-${String(index).padStart(3, '0')}`, now, now)
       }
       const created = 100 - (end - start)
@@ -220,16 +226,15 @@ describe('initial CEFR-J onboarding API', () => {
     }
     addCatalog(sqlite, 'prior-level', 'fixture-000', 'A1')
     const cookie = await createSession('owner')
-    sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
+    sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type,
       vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
-      VALUES ('existing', 'owner', 'vocabulary', 'existing', 'keep me',
-      'prior-level', 'fixture-000', ?, ?)`).run(now, now)
+      VALUES ('existing', 'owner', 'vocabulary', 'prior-level', 'fixture-000', ?, ?)`).run(now, now)
     const first = await choose('A2', cookie)
     expect(first.status).toBe(200)
     expect(await first.json()).toEqual({ english_level: 'A2', starter_cards_created: 99, already_selected: false })
     expect(cardRows(sqlite, 'owner')).toHaveLength(100)
     expect(sqlite.prepare("SELECT back_content FROM flashcards WHERE id = 'existing'").get())
-      .toEqual({ back_content: 'keep me' })
+      .toEqual({ back_content: null })
     expect(sqlite.prepare('SELECT COUNT(DISTINCT vocabulary_key) AS count FROM flashcards WHERE user_id = ?').get('owner'))
       .toEqual({ count: 100 })
     expect(sqlite.prepare('SELECT total_cards_created FROM user_stats WHERE user_id = ?').get('owner'))
@@ -279,7 +284,7 @@ describe('initial CEFR-J onboarding API', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_settings').get()).toEqual({ count: 0 })
   })
 
-  it('copies available ReLai enrichment while retaining the catalog link', async () => {
+  it('reads canonical enrichment through the catalog link without copying it to ownership rows', async () => {
     addCatalog(sqlite, 'enriched', 'ability', 'A2')
     sqlite.prepare(`UPDATE vocabulary_catalog SET zh_tw_definition = ?, english_example = ?,
       zh_tw_example_translation = ?, irish_usage = ? WHERE id = 'enriched'`)
@@ -292,7 +297,7 @@ describe('initial CEFR-J onboarding API', () => {
     expect(card.back_content).toContain('test-existing-zh')
     expect(card.back_content).toContain('test-existing-example')
     expect(card.back_content).toContain('test-existing-translation')
-    expect(sqlite.prepare("SELECT irish_usage FROM flashcards WHERE user_id = 'owner'").get())
-      .toEqual({ irish_usage: 'test-existing-usage' })
+    expect(sqlite.prepare("SELECT front_content, back_content, irish_usage, source FROM flashcards WHERE user_id = 'owner'").get())
+      .toEqual({ front_content: null, back_content: null, irish_usage: null, source: null })
   })
 })

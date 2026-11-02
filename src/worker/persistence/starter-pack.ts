@@ -2,8 +2,7 @@ import type { PersistenceDatabase, PersistenceStatement } from './d1'
 import type { EnglishLevel } from './types'
 
 export const STARTER_BATCH_SIZE = 100
-// Each card uses two bindings; each INSERT also binds five shared values.
-// 47 cards use 99 parameters, below D1's 100-parameter query limit.
+// 47 associations use 99 bindings, within D1's 100-parameter query limit.
 const STARTER_INSERT_SIZE = 47
 const SOURCE_DATASET = 'CEFR-J Vocabulary Profile'
 const SOURCE_VERSION = '1.6'
@@ -32,8 +31,7 @@ export async function bootstrapStarterPack(
       : { kind: 'different_level', english_level: current.english_level }
   }
 
-  // Choose exactly one catalog row per personal vocabulary_key. The tie-breaker is
-  // stable catalog id, so repeated or concurrent requests see the same bounded pack.
+  // Stable id tie-breaker gives each normalized key one deterministic catalog row.
   const candidates = await db.prepare(`WITH ranked AS (
       SELECT id, normalized_key,
         ROW_NUMBER() OVER (PARTITION BY normalized_key ORDER BY id) AS key_rank
@@ -48,25 +46,15 @@ export async function bootstrapStarterPack(
   const ids = candidates.results.map(({ id }) => [id, crypto.randomUUID()] as const)
   const statements: PersistenceStatement[] = []
   const insertIndexes: number[] = []
-  // D1 serializes the entire batch transaction. Keep the level unclaimed until
-  // all chunks are inserted, so every chunk can use the same persistent guard.
-  // A concurrent losing batch sees the committed level and inserts nothing.
+  // D1 batch makes the level claim and all card inserts one transaction.
   for (let offset = 0; offset < ids.length; offset += STARTER_INSERT_SIZE) {
     const chunk = ids.slice(offset, offset + STARTER_INSERT_SIZE)
     const values = chunk.map(() => '(?, ?)').join(', ')
     insertIndexes.push(statements.length)
     statements.push(db.prepare(`WITH chosen(catalog_id, card_id) AS (VALUES ${values})
-      INSERT INTO flashcards (id, user_id, card_type, front_content, back_content,
-        part_of_speech, zh_tw_definition, explanation, irish_usage, source,
-        vocabulary_catalog_id, vocabulary_key, created_at, updated_at)
-      SELECT chosen.card_id, ?, 'vocabulary', catalog.headword,
-        COALESCE(catalog.zh_tw_definition || char(10), '') ||
-        COALESCE(catalog.english_example,
-          'CEFR-J ' || catalog.cefr_level || COALESCE(' · ' || catalog.part_of_speech, '')) ||
-        COALESCE(char(10) || catalog.zh_tw_example_translation, ''),
-        catalog.part_of_speech, catalog.zh_tw_definition, NULL, catalog.irish_usage,
-        catalog.source_dataset || ' ' || catalog.source_version,
-        catalog.id, catalog.normalized_key, ?, ?
+      INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id,
+        vocabulary_key, created_at, updated_at)
+      SELECT chosen.card_id, ?, 'vocabulary', catalog.id, catalog.normalized_key, ?, ?
       FROM chosen JOIN vocabulary_catalog AS catalog ON catalog.id = chosen.catalog_id
       WHERE NOT EXISTS (
         SELECT 1 FROM user_settings WHERE user_id = ? AND english_level IS NOT NULL
@@ -75,7 +63,7 @@ export async function bootstrapStarterPack(
           AND owned.card_type = 'vocabulary' AND owned.vocabulary_key = catalog.normalized_key
       ) ON CONFLICT DO NOTHING`)
       .bind(...chunk.flat(), userId, at, at, userId, userId))
-    // Read changes() immediately after EACH card INSERT, including empty chunks.
+    // changes() belongs to the immediately preceding INSERT.
     statements.push(db.prepare(`INSERT INTO user_stats (user_id, total_cards_created, updated_at)
       SELECT ?, changes(), ? WHERE changes() > 0
       ON CONFLICT(user_id) DO UPDATE SET

@@ -41,8 +41,14 @@ export function verifyCoreSchema(execute) {
     assert.deepEqual(columns, expected, `${table}: exact PRD columns, types, nullability, defaults and primary keys`)
     const foreignKeys = query(`PRAGMA foreign_key_list('${table}')`)
     assert.deepEqual(foreignKeys, table === 'flashcards'
-      ? [{ id: 0, seq: 0, table: 'vocabulary_catalog', from: 'vocabulary_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' }]
-      : [], 'Only the catalog link has foreign key semantics')
+      ? [
+        { id: 0, seq: 0, table: 'user_vocabulary_items', from: 'user_vocabulary_item_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+        { id: 0, seq: 1, table: 'user_vocabulary_items', from: 'user_id', to: 'user_id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+        { id: 0, seq: 2, table: 'user_vocabulary_items', from: 'vocabulary_key', to: 'normalized_key', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+        { id: 1, seq: 0, table: 'vocabulary_catalog', from: 'vocabulary_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+        { id: 1, seq: 1, table: 'vocabulary_catalog', from: 'vocabulary_key', to: 'normalized_key', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ]
+      : [], 'Only the vocabulary source links have foreign key semantics')
     assert.equal(query(`SELECT COUNT(*) AS count FROM ${table}`)[0].count, 0, 'Migration must not seed data')
   }
   for (const [table, columns] of [
@@ -56,11 +62,17 @@ export function verifyCoreSchema(execute) {
     ['vocabulary_catalog', ['cefr_level', 'id']],
     ['vocabulary_catalog', ['normalized_key']],
     ['flashcards', ['user_id', 'vocabulary_catalog_id']],
+    ['flashcards', ['user_id', 'user_vocabulary_item_id']],
     ['flashcards', ['user_id', 'vocabulary_key']],
   ]) assert.ok(hasIndex(table, columns), `${table}(${columns}) index required`)
+  assert.ok(hasIndex('user_vocabulary_items', ['user_id', 'normalized_key'], true),
+    'Personal vocabulary identity must be unique per user')
   assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
     index.index_name === 'idx_vocabulary_catalog_source_identity' && index.is_unique === 1),
   'Catalog identity must be unique including missing part of speech')
+  assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
+    index.index_name === 'idx_vocabulary_catalog_id_key' && index.is_unique === 1),
+  'Catalog source references must keep their normalized identity')
 
   const history = query('SELECT name FROM d1_migrations ORDER BY id')
   const migrations = readdirSync('migrations').filter((name) => name.endsWith('.sql')).sort()
