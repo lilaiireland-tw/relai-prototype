@@ -49,7 +49,6 @@ describe('Phase 4 authenticated product UI', () => {
  it.each(['success', 'network', '503'] as const)('preserves mounted card position, filter and flip during %s focus revalidation', async outcome => {
   const storageSpy = vi.spyOn(Storage.prototype, 'setItem')
   await renderAt('cards')
-  await change('select[aria-label="篩選卡片"]', 'all')
   await click(button('下一張')); await click(button('翻面'))
   const card = container.querySelector('.flip-card-inner')
   const filter = container.querySelector<HTMLSelectElement>('select[aria-label="篩選卡片"]')!
@@ -65,12 +64,12 @@ describe('Phase 4 authenticated product UI', () => {
   const expectPreserved = () => {
    expect(window.location.pathname).toBe('/relaiapp/cards')
    expect(container.textContent).toBe(content)
-   expect(container.textContent).toContain('2 / 7')
+   expect(container.textContent).toContain('2 / 4')
    expect(container.querySelector('.flip-card-inner')).toBe(card)
    expect(card?.classList.contains('flipped')).toBe(true)
    expect(button('翻面').getAttribute('aria-pressed')).toBe('true')
    expect(container.querySelector('select[aria-label="篩選卡片"]')).toBe(filter)
-   expect(filter.value).toBe('all')
+   expect(filter.value).toBe('vocabulary')
    expect(requests('/settings')).toHaveLength(settingsReads)
    expect(requests('/cards')).toHaveLength(cardsReads)
    expect(storageSpy).not.toHaveBeenCalled()
@@ -92,7 +91,7 @@ describe('Phase 4 authenticated product UI', () => {
    expect(container.querySelector('.flip-card-inner')).toBeNull()
   } else {
    await click(button('下一張'))
-   expect(container.textContent).toContain('3 / 7')
+   expect(container.textContent).toContain('3 / 4')
   }
  })
  it('hides Cards and redirects to login when background focus revalidation returns 401', async () => {
@@ -114,7 +113,7 @@ describe('Phase 4 authenticated product UI', () => {
   expect(requests('/cards')).toHaveLength(1)
  })
 
- it.each(['home', 'cards', 'error-log', 'stats', 'settings'])('gates no-level %s before loading product screens', async path => {
+ it.each(['home', 'cards', 'cards/vocab-1', 'vocabulary', 'capture', 'error-log', 'stats', 'settings'])('gates no-level %s before loading product screens', async path => {
   server.home.settings.english_level = null
   await renderAt(path)
   expect(window.location.pathname).toBe('/relaiapp/onboarding')
@@ -137,7 +136,7 @@ describe('Phase 4 authenticated product UI', () => {
  })
 
  it('extracts a picture preview, saves only checked words, and reloads the new flashcard', async () => {
-  await renderAt('cards')
+  await renderAt('capture')
   const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
   const file = new File([new Uint8Array([137, 80, 78, 71])], 'lesson.png', { type: 'image/png' })
   await act(() => {
@@ -146,7 +145,7 @@ describe('Phase 4 authenticated product UI', () => {
   })
   await click(button('解析圖片'))
   expect(container.textContent).toContain('She was curious about the old map.')
-  const checked = container.querySelector<HTMLInputElement>('input[aria-label="選取 map"]')!
+  const checked = container.querySelector<HTMLInputElement>('input[aria-label="選擇 map"]')!
   await click(checked)
   const cardsBefore = requests('/cards').length
   await click(button('儲存勾選單字'))
@@ -155,13 +154,16 @@ describe('Phase 4 authenticated product UI', () => {
   expect(new Headers(uploadCall.headers).has('Content-Type')).toBe(false)
   const saveCall = requests('/vocabulary/save', 'POST')[0][1]!
   expect(JSON.parse(String(saveCall.body)).items.map((item: { headword: string }) => item.headword)).toEqual(['curious'])
-  expect(requests('/cards').length).toBeGreaterThan(cardsBefore)
   expect(server.home.cards.some(card => card.front_content === 'curious')).toBe(true)
+  await click(container.querySelector('a[href="/relaiapp/vocabulary"]')!)
+  expect(requests('/cards').length).toBeGreaterThan(cardsBefore)
+  expect(window.location.pathname).toBe('/relaiapp/vocabulary')
+  expect(container.textContent).toContain('curious')
   await refreshAt('cards')
   expect(container.textContent).toContain('curious')
  })
  it('shows an explicit pending message for ambiguous catalog matches', async () => {
-  await renderAt('cards')
+  await renderAt('capture')
   const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="選擇英文學習圖片"]')!
   await act(() => {
    Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'lesson.png', { type: 'image/png' })] })
@@ -172,8 +174,65 @@ describe('Phase 4 authenticated product UI', () => {
    headword: 'curious', status: 'pending', reason: 'catalog_ambiguous', catalog_definition: '好奇的',
   }] }))
   await click(button('儲存勾選單字'))
-  expect(container.textContent).toContain('目錄有多筆內容不同的同詞性項目')
-  expect(container.textContent).toContain('尚未建立卡片')
+  expect(container.textContent).toContain('目錄中有多個可能的項目')
+  expect(container.textContent).toContain('暫時待補充')
+ })
+ it('keeps the answer off the card front and separates each back field', async () => {
+  await renderAt('cards')
+  const front = container.querySelector<HTMLElement>('.flip-card-face:not(.flip-card-back)')!
+  expect(front.textContent?.replace(/\s/g, '')).toBe('serendipityn.')
+  expect(front.textContent).not.toContain('意外發現珍奇事物的運氣')
+  expect(front.textContent).not.toContain('Meeting my business partner')
+  expect(button('翻面').className).toContain('h-12')
+  expect(button('下一張').className).toContain('h-12')
+  expect(button('完成複習').className).toContain('h-12')
+
+  await click(button('翻面'))
+  const back = container.querySelector<HTMLElement>('.flip-card-back')!
+  expect(back.textContent).toContain('繁體中文釋義')
+  expect(back.textContent).toContain('意外發現珍奇事物的運氣')
+  expect(back.textContent).toContain('英文例句')
+  expect(back.textContent).toContain('Meeting my business partner')
+  expect(back.textContent).toContain('例句中文翻譯')
+  expect(back.textContent).toContain('在都柏林那間小咖啡館遇見我的事業夥伴')
+ })
+ it('opens the exact recent card and the full vocabulary list with its favorites filter', async () => {
+  server.home.cards.find(card => card.id === 'vocab-2')!.is_favorite = true
+  await renderAt('home')
+  expect(container.textContent).not.toContain('錯誤卡')
+  expect(container.querySelector('a[href="/relaiapp/error-log"]')).toBeNull()
+  const recent = container.querySelector<HTMLAnchorElement>('a[href="/relaiapp/cards/vocab-1"]')!
+  expect(recent.textContent).toContain('serendipity')
+  expect(recent.textContent).not.toContain('Meeting my business partner')
+  await click(recent)
+  expect(window.location.pathname).toBe('/relaiapp/cards/vocab-1')
+  expect(container.querySelector('select[aria-label="篩選卡片"]')).toBeNull()
+  expect(container.querySelector('.flip-card-face:not(.flip-card-back)')?.textContent).toContain('serendipity')
+
+  await refreshAt('home')
+  await click(container.querySelector('a[href="/relaiapp/vocabulary"]')!)
+  expect(window.location.pathname).toBe('/relaiapp/vocabulary')
+  expect(['serendipity', 'grand', 'procrastinate', 'craic'].every(word => container.textContent?.includes(word))).toBe(true)
+  expect(requests('/cards').some(([url]) => new URL(String(url), 'https://example.test').searchParams.get('card_type') === 'vocabulary')).toBe(true)
+  await click(button('收藏'))
+  expect(container.querySelectorAll('main a[href^="/relaiapp/cards/"]')).toHaveLength(1)
+  const favorite = container.querySelector<HTMLAnchorElement>('main a[href="/relaiapp/cards/vocab-2"]')!
+  await click(favorite)
+  expect(window.location.pathname).toBe('/relaiapp/cards/vocab-2')
+  expect(container.querySelector('.flip-card-face:not(.flip-card-back)')?.textContent).toContain('grand')
+ })
+ it('offers camera and file upload on the dedicated AI recognition screen', async () => {
+  await renderAt('home')
+  expect(container.querySelector('a[href="/relaiapp/capture"]')?.textContent).toContain('AI 辨識')
+  expect(container.querySelector('a[href="/relaiapp/error-log"]')).toBeNull()
+  await click(container.querySelector('a[href="/relaiapp/capture"]')!)
+  const camera = container.querySelector<HTMLInputElement>('input[aria-label="拍攝英文學習圖片"]')!
+  const picker = container.querySelector<HTMLInputElement>('input[aria-label="選擇英文學習圖片"]')!
+  expect(camera.getAttribute('capture')).toBe('environment')
+  expect(camera.accept).toBe('image/*')
+  expect(picker.accept).toContain('image/png')
+  await refreshAt('cards')
+  expect([...container.querySelectorAll<HTMLSelectElement>('select option')].map(option => option.value)).not.toContain('error_log')
  })
  it('keeps onboarding available after catalog failure and retries the same selected level', async () => {
   server.home.settings.english_level = null
@@ -214,10 +273,9 @@ describe('Phase 4 authenticated product UI', () => {
  it('keeps flip, view, next and filters read-only; completion refreshes real progress', async () => {
   await renderAt('cards')
   expect(button('完成複習').disabled).toBe(true)
-  await click(button('翻面')); await click(button('下一張'))
-  await change('select[aria-label="篩選卡片"]', 'all')
+  await click(button('翻面'))
   expect(requests('/reviews')).toHaveLength(0)
-  await click(button('翻面')); await click(button('完成複習'))
+  await click(button('完成複習'))
   expect(requests('/reviews', 'POST')).toHaveLength(1)
   const body = JSON.parse(String(requests('/reviews')[0][1]?.body))
   expect(body).toEqual({ card_id: 'vocab-1', review_result: 'viewed', client_event_id: expect.any(String) })
@@ -258,7 +316,9 @@ describe('Phase 4 authenticated product UI', () => {
   await renderAt('cards'); await click(button('收藏'))
   await change('select[aria-label="篩選卡片"]', 'favorites')
   expect(container.textContent).toContain('1 / 1')
-  expect(requests('/cards').some(([url]) => String(url).includes('favorite=true'))).toBe(true)
+  const favoritesRequest = requests('/cards').find(([url]) => String(url).includes('favorite=true'))
+  expect(favoritesRequest).toBeTruthy()
+  expect(new URL(String(favoritesRequest?.[0]), 'https://example.test').searchParams.get('card_type')).toBe('vocabulary')
   expect([...container.querySelectorAll('button')].some(element => element.textContent?.trim() === '編輯')).toBe(false)
   expect(requests('/cards/vocab-1', 'PATCH')).toHaveLength(0)
   await refreshAt('cards')
@@ -289,10 +349,10 @@ describe('Phase 4 authenticated product UI', () => {
   expect(requests('/cards').some(([url]) => String(url).includes('needs_review=true'))).toBe(true)
   await click(button('翻面')); await click(button('完成複習'))
   expect(container.textContent).not.toContain('serendipity')
-  expect(container.textContent).toContain('1 / 6')
-  await change('select', 'error_log')
+  expect(container.textContent).toContain('1 / 3')
+  await refreshAt('error-log')
   expect(container.textContent).toContain('原句')
-  await change('select', 'vocabulary'); expect(container.textContent).toContain('serendipity')
+  await refreshAt('cards'); expect(container.textContent).toContain('serendipity')
  })
  it('shows real statistics and persists settings without bootstrapping or deleting cards', async () => {
   await renderAt('stats')
@@ -330,7 +390,7 @@ describe('Phase 4 authenticated product UI', () => {
   await act(() => resolveCards(Response.json({ cards: [], next_cursor: null })))
   expect(container.textContent).toContain('目前沒有符合篩選的')
   vi.mocked(fetch).mockImplementationOnce(async () => new Response(null, { status: 503 }))
-  await change('select', 'all')
+  await change('select', 'needs_review')
   expect(container.textContent).toContain('讀取資料失敗')
   await click(button('重試')); expect(container.textContent).toContain('serendipity')
   expect(container.querySelector('[data-source="mock"]')).toBeNull()

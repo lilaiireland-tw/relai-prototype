@@ -83,10 +83,12 @@ const metadata = {
 const cards: Flashcard[] = [
   ...vocabulary.map(card => ({ ...metadata, id: card.id, card_type: 'vocabulary' as const,
     front_content: card.word, back_content: card.exampleEn, part_of_speech: card.partOfSpeech,
-    zh_tw_definition: card.zhDefinition, explanation: card.exampleZh, irish_usage: card.irishUsage ?? null })),
+    zh_tw_definition: card.zhDefinition, english_example: card.exampleEn,
+    zh_tw_example_translation: card.exampleZh, explanation: null, irish_usage: card.irishUsage ?? null })),
   ...errors.map(card => ({ ...metadata, id: card.id, card_type: 'error_log' as const,
     front_content: card.wrongSentence, back_content: card.correctSentence, part_of_speech: card.errorType,
-    zh_tw_definition: null, explanation: card.explanation, irish_usage: null })),
+    zh_tw_definition: null, english_example: null, zh_tw_example_translation: null,
+    explanation: card.explanation, irish_usage: null })),
 ];
 export const fixtureHome: HomeData = {
   cards,

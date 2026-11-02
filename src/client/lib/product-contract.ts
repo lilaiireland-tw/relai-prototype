@@ -5,7 +5,8 @@ const nullableText = z.string().nullable()
 export const cardSchema = z.object({
  id: z.string(), user_id: z.string(), source_item_id: nullableText,
  card_type: z.enum(['vocabulary', 'error_log']), front_content: z.string(), back_content: z.string(),
- part_of_speech: nullableText, zh_tw_definition: nullableText, explanation: nullableText,
+ part_of_speech: nullableText, zh_tw_definition: nullableText, english_example: nullableText.optional(),
+ zh_tw_example_translation: nullableText.optional(), explanation: nullableText,
  irish_usage: nullableText, source: nullableText, is_favorite: z.boolean(),
  last_reviewed_at: nullableText, next_review_at: nullableText, created_at: z.string(), updated_at: z.string(),
 })

@@ -1,26 +1,27 @@
 import { useCallback, useRef, useState, type FormEvent } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { ArrowLeft, ArrowRight, RotateCw, Star } from 'lucide-react'
 import { clientData } from '../services/data'
 import { useClientData } from '../services/useClientData'
 import type { CardFilter, CardPatch, Flashcard, StatsSummary } from '../services/types'
 import CardContent from './CardContent'
 import DataState from './DataState'
-import ImageVocabularyCapture from './ImageVocabularyCapture'
 
 const filters: { value: CardFilter; label: string }[] = [
- { value: 'all', label: '全部' }, { value: 'vocabulary', label: 'Vocabulary' },
- { value: 'error_log', label: 'Error Log' }, { value: 'favorites', label: '收藏' },
+ { value: 'vocabulary', label: '全部單字' }, { value: 'favorites', label: '收藏' },
  { value: 'needs_review', label: '需要複習' },
 ]
-export default function CardsPage({ initialFilter, title, captureVocabulary = false }: { initialFilter: CardFilter; title: string; captureVocabulary?: boolean }) {
+export default function CardsPage({ initialFilter, title }: { initialFilter: CardFilter; title: string }) {
+ const { cardId } = useParams()
+ const navigate = useNavigate()
  const [filter, setFilter] = useState(initialFilter)
  const load = useCallback(() => clientData.listCards(filter), [filter])
  const { data, loading, error, reload, setData } = useClientData(load)
  const [index, setIndex] = useState(0)
  const cards = data ?? []
- const position = cards.length ? index % cards.length : 0
- const card = cards[position]
+ const requestedIndex = cardId ? cards.findIndex(item => item.id === cardId) : -1
+ const position = cardId ? requestedIndex : cards.length ? index % cards.length : 0
+ const card = position >= 0 ? cards[position] : undefined
  return <div className="flex flex-1 flex-col">
   <header className="flex items-center justify-between px-4 pt-6">
    <Link to="/home" aria-label="返回首頁" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-card-gray"><ArrowLeft size={20} /></Link>
@@ -28,18 +29,23 @@ export default function CardsPage({ initialFilter, title, captureVocabulary = fa
    <button type="button" onClick={reload} disabled={loading} aria-label="重新整理" className="h-9 w-9 text-text-secondary"><RotateCw size={18} /></button>
   </header>
   <div className="px-5 pt-4" data-source="api">
-   <label className="flex items-center gap-3 text-sm text-text-secondary">篩選
+   {!cardId && initialFilter !== 'error_log' && <label className="flex items-center gap-3 text-sm text-text-secondary">篩選
     <select aria-label="篩選卡片" value={filter} onChange={event => { setData(null); setFilter(event.target.value as CardFilter); setIndex(0) }} className="rounded-xl border border-gray-200 bg-white p-2">
      {filters.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
     </select>
-   </label>
+   </label>}
    <p className="mt-3 text-sm text-text-secondary">{card ? position + 1 : 0} / {cards.length}</p>
    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-irish-green transition-all" style={{ width: `${card ? (position + 1) / cards.length * 100 : 0}%` }} /></div>
    <DataState loading={loading} error={error} retry={reload} />
   </div>
-  {captureVocabulary && <ImageVocabularyCapture onSaved={reload} />}
-  {card ? <CardViewer key={`${filter}:${card.id}:${index}`} card={card} reload={reload} next={() => setIndex(value => value + 1)} /> : !loading && !error &&
-   <div className="m-5 rounded-2xl border border-dashed border-gray-200 px-6 py-10 text-center text-sm text-text-secondary">目前沒有{filter === 'vocabulary' ? ' vocabulary' : filter === 'error_log' ? ' error log' : '符合篩選的'} 卡片。</div>}
+  {card ? <CardViewer key={`${filter}:${card.id}:${index}`} card={card} reload={reload} next={() => {
+   if (cardId) navigate(`/cards/${encodeURIComponent(cards[(position + 1) % cards.length].id)}`)
+   else setIndex(value => value + 1)
+  }} /> : !loading && !error &&
+   <div className="m-5 rounded-2xl border border-dashed border-gray-200 px-6 py-10 text-center text-sm text-text-secondary">
+    {cardId ? <>找不到這張單字卡，可能已被移除。<Link to="/vocabulary" className="ml-1 text-irish-green underline">返回我的單字</Link></>
+     : `目前沒有${filter === 'vocabulary' ? ' vocabulary' : filter === 'error_log' ? ' error log' : '符合篩選的'} 卡片。`}
+   </div>}
  </div>
 }
 
@@ -81,8 +87,8 @@ function CardViewer({ card, reload, next }: { card: Flashcard; reload: () => voi
     <button type="button" disabled={busy} onClick={() => { setDeleting(true); setEditing(false) }}>刪除</button>
    </div>
    {editing ? <CardEditor card={card} busy={busy} cancel={() => setEditing(false)} save={patch => void mutate(async () => { await clientData.updateCard(card.id, patch); setEditing(false) })} /> : <CardContent card={card} flipped={flipped} />}
-   {!editing && card.card_type === 'vocabulary' && <button type="button" disabled={busy} aria-pressed={flipped} onClick={() => setFlipped(value => !value)} className="mx-auto mt-6 flex flex-col items-center gap-1.5 text-text-secondary hover:text-irish-green">
-    <span className="flex h-11 w-11 items-center justify-center rounded-full border border-gray-200"><RotateCw size={18} /></span><span className="text-xs font-medium">翻面</span>
+   {!editing && card.card_type === 'vocabulary' && <button type="button" disabled={busy} aria-pressed={flipped} onClick={() => setFlipped(value => !value)} className="mx-auto mt-4 flex h-12 w-full max-w-lg items-center justify-center gap-2 rounded-xl border border-gray-200 text-sm font-medium text-text-secondary hover:text-irish-green">
+    <RotateCw size={18} /><span>翻面</span>
    </button>}
    {deleting && <section role="dialog" aria-label="確認刪除卡片" className="mt-5 rounded-xl border border-red-100 bg-error-bg p-4 text-sm">
     <p>確定刪除此卡片？</p><div className="mt-3 flex gap-5">
@@ -93,9 +99,9 @@ function CardViewer({ card, reload, next }: { card: Flashcard; reload: () => voi
    {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}
    {completed && <p role="status" className="mt-4 text-sm text-irish-green">複習已完成{summary && ` · 今日 ${summary.today_completed_reviews} / ${summary.daily_goal} 次 · 連續 ${summary.streak_days} 天`}</p>}
   </main>
-  <div className="flex flex-col gap-3 px-5 pb-8">
-   <button type="button" disabled={busy || completed || editing || deleting || (card.card_type === 'vocabulary' && !flipped)} onClick={() => void complete()} className="h-12 rounded-xl bg-irish-green font-semibold text-white hover:bg-irish-green-dark disabled:opacity-60">{completed ? '已完成複習' : '完成複習'}</button>
-   <button type="button" disabled={busy} onClick={next} className="flex h-12 items-center justify-center gap-2 rounded-xl border border-gray-200 font-semibold text-text-primary">下一張<ArrowRight size={18} /></button>
+  <div className="grid grid-cols-2 gap-3 px-5 pb-6">
+   <button type="button" disabled={busy || completed || editing || deleting || (card.card_type === 'vocabulary' && !flipped)} onClick={() => void complete()} className="h-12 rounded-xl bg-irish-green px-2 text-sm font-semibold text-white hover:bg-irish-green-dark disabled:opacity-60">{completed ? '已完成複習' : '完成複習'}</button>
+   <button type="button" disabled={busy} onClick={next} className="flex h-12 items-center justify-center gap-2 rounded-xl border border-gray-200 px-2 text-sm font-semibold text-text-primary">下一張<ArrowRight size={18} /></button>
   </div>
  </>
 }

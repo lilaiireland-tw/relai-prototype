@@ -4,7 +4,6 @@ import { Link } from "react-router";
 import {
   BookOpen,
   ChevronRight,
-  Languages,
   RefreshCw,
   Target,
   UserCircle2,
@@ -27,11 +26,6 @@ export default function HomePage() {
     () => flashcards.filter((card) => card.card_type === "vocabulary"),
     [flashcards],
   );
-  const errorCards = useMemo(
-    () => flashcards.filter((card) => card.card_type === "error_log"),
-    [flashcards],
-  );
-
   const stats = bootstrap?.stats;
   const settings = bootstrap?.settings;
   const dailyGoal = settings?.daily_goal ?? 10;
@@ -103,13 +97,6 @@ export default function HomePage() {
             </div>
             <div className="rounded-2xl border border-gray-100 bg-card-gray p-4">
               <div className="flex items-center gap-2 text-irish-green">
-                <Languages size={18} />
-                <span className="text-sm font-semibold">錯誤卡</span>
-              </div>
-              <p className="mt-3 text-2xl font-bold text-text-primary">{errorCards.length}</p>
-            </div>
-            <div className="rounded-2xl border border-gray-100 bg-card-gray p-4">
-              <div className="flex items-center gap-2 text-irish-green">
                 <RefreshCw size={18} />
                 <span className="text-sm font-semibold">總複習數</span>
               </div>
@@ -129,16 +116,16 @@ export default function HomePage() {
           <section className="mt-6">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-bold text-text-primary">最近建立的卡片</h2>
-              <Link to="/cards" className="flex items-center gap-1 text-xs text-text-secondary">
+              <Link to="/vocabulary" className="flex items-center gap-1 text-xs text-text-secondary">
                 查看更多
                 <ChevronRight size={14} />
               </Link>
             </div>
             <div className="mt-3 flex flex-col gap-2">
-              {flashcards.slice(0, 4).map((card) => (
+              {vocabularyCards.slice(0, 4).map((card) => (
                 <Link
                   key={card.id}
-                  to={card.card_type === "error_log" ? "/error-log" : "/cards"}
+                  to={`/cards/${encodeURIComponent(card.id)}`}
                   className="rounded-xl border border-gray-100 bg-card-gray p-4 transition-colors hover:bg-gray-100"
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -146,15 +133,14 @@ export default function HomePage() {
                       {card.front_content}
                     </p>
                     <span className="shrink-0 text-[11px] text-text-secondary">
-                      {card.card_type === "error_log" ? "Error Log" : "Vocabulary"}
+                      {card.part_of_speech}
                     </span>
                   </div>
-                  <p className="mt-1 line-clamp-2 text-sm text-text-secondary">{card.back_content}</p>
                 </Link>
               ))}
-              {flashcards.length === 0 ? (
+              {vocabularyCards.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-sm text-text-secondary">
-                  目前沒有卡片。
+                  目前沒有單字卡。
                 </div>
               ) : null}
             </div>

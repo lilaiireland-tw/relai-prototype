@@ -95,6 +95,7 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     listCards(filter: CardFilter = 'all', cursor?: string) {
       const query = new URLSearchParams({ limit: '100' })
       if (filter === 'vocabulary' || filter === 'error_log') query.set('card_type', filter)
+      if (filter === 'favorites' || filter === 'needs_review') query.set('card_type', 'vocabulary')
       if (filter === 'favorites') query.set('favorite', 'true')
       if (filter === 'needs_review') query.set('needs_review', 'true')
       if (cursor) query.set('cursor', cursor)
