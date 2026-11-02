@@ -159,25 +159,32 @@ Never:
 
 ### P0 Remote Cloudflare Access Guard (Issue #95)
 
-Effective 2026-11-02, routine development, debugging, builds, tests and CI must not access Cloudflare staging or production resources. Do not run remote D1 queries or schema verification, live Worker/API checks, remote migrations, Wrangler tail/deploy commands, remote Queue/R2 operations, or remote imports/seeds. Read-only operations can still consume D1 row-read quota.
+Effective 2026-11-02, routine development, debugging, builds, tests and CI must not access Cloudflare staging or production resources. Without specific Product Owner authorization, do not make any remote Cloudflare API request, remote D1 read or write, remote schema verification, live Worker/API check, remote migration, Wrangler tail/deploy call, Queue/R2 operation, or remote import/seed. Read-only operations can still consume D1 row-read quota.
 
 - Use only isolated local D1, mocked services, simulated Queue/R2 and local browser services for routine work.
+- Routine Codex execution must have empty Cloudflare, Google and Gemini credential variables, no accessible authenticated Wrangler profile, and no secret bindings in local Worker processes. Repository wrappers clear process credentials, isolate Wrangler state and block non-loopback Node network access; local Worker configs exclude `.dev.vars` secrets, and CI asserts empty credentials and blocks remote traffic.
 - Before running an npm script, inspect its full command and transitive scripts for remote access. Do not infer safety from a read-only label.
 - `npm test`, `npm run test:d1-schema`, `npm run test:e2e`, builds and CI must block outbound Cloudflare/Google access and receive empty Cloudflare/Google credentials.
+- Direct `wrangler`/`npx wrangler` commands bypass repository approval wrappers. Do not use direct Wrangler commands for remote operations; empty environment variables do not replace isolation from cached Wrangler authentication.
 - Remote operator commands fail closed and require both `--approve-remote-cloudflare` and `RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT`. These safeguards do not themselves authorize an operation: Codex must also have separate explicit Product Owner authorization for that specific remote action. Never set the opt-in during routine development.
 - The staging schema verifier is metadata-only, bounded, and operator-only. Do not add application-table counts, `PRAGMA foreign_key_check`, or unbounded result queries to it.
 - Historical Cloudflare Dashboard analytics may be reviewed only with separate authorization. Do not run live SQL to attribute a quota incident.
-- Do not apply migrations, deploy, access remote resources, or merge as part of Issue #95.
+- Staging and production operations require separate, environment-specific Product Owner authorizations. A staging approval never authorizes production, or vice versa; authorize each remote action separately.
+- Do not apply migrations, deploy, access remote resources, or merge as part of P0 incident analysis or safety hardening.
 
 ### Database Migrations
 
 - Use repository-root `migrations/` as the schema source of truth.
+- Apply every new migration first to isolated local D1 and validate its schema and data effects before any remote operation.
+- Any migration that copies or rebuilds an existing table requires a written scan-risk assessment covering affected tables, expected row volume, access plan, indexes, and growth behavior.
+- Codex must never apply remote migrations automatically. Staging and production migration operations require separate, explicit, narrowly scoped Product Owner authorization.
+- Keep remote verification metadata-only and bounded; a full-table scan requires separate explicit approval for that verification.
 - Keep migrations append-only.
 - Never rewrite an already applied migration.
 - Preserve existing user data and ownership relationships.
 - Validate schema and data compatibility when migrations affect existing records.
 - Keep staging and production migrations separate.
-- Never automatically apply production migrations through ordinary CI or development deployment.
+- Ordinary CI must never apply migrations to any remote database. Never automatically apply production migrations through CI or development deployment.
 
 Database safety takes priority over implementation speed.
 

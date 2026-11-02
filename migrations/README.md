@@ -23,6 +23,17 @@ committed/applied migration; correct it with a new migration. Wrangler records
 applied filenames in `d1_migrations`; keep that history intact. Do not repair
 schema through unrecorded Dashboard SQL.
 
+Apply every new migration against isolated local D1 first. A migration that
+copies or rebuilds an existing table needs a written scan-risk assessment before
+remote review. Remote verification must stay bounded unless a full-table scan is
+separately authorized. Codex never applies remote migrations automatically;
+staging and production operations need separate, narrowly scoped Product Owner
+authorization. Ordinary CI never applies remote migrations. Direct
+`wrangler`/`npx wrangler` commands bypass repository approval wrappers, so routine
+Codex execution must have no Cloudflare/Google/Gemini credentials, cached Wrangler
+authentication, or secret bindings in local Worker processes. Local Worker config
+excludes `.dev.vars` secrets.
+
 See [D1 migration workflow](../docs/d1-migrations.md) for exact local/staging
 commands, production release steps, and safety rules.
 

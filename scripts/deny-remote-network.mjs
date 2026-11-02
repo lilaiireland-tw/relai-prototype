@@ -6,8 +6,30 @@ import { mkdirSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { URL, fileURLToPath, pathToFileURL } from 'node:url'
 
+for (const name of [
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CF_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_ENV', 'CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV', 'CLOUDFLARE_INCLUDE_PROCESS_ENV',
+  'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'GEMINI_API_KEY',
+]) process.env[name] = ''
+process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false'
+process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false'
+process.env.WRANGLER_SEND_METRICS = 'false'
+
 const repositoryRoot = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const localWranglerConfig = resolve(repositoryRoot, '.wrangler/local/config')
+const localWranglerRegistry = resolve(repositoryRoot, '.wrangler/local/registry')
 const localWranglerLogs = resolve(repositoryRoot, '.wrangler/logs')
+function repositoryPath(value, fallback) {
+  const candidate = resolve(value ?? fallback)
+  const pathRelativeToRepository = relative(repositoryRoot, candidate)
+  return pathRelativeToRepository === '..' || pathRelativeToRepository.startsWith(`..${sep}`) || isAbsolute(pathRelativeToRepository)
+    ? fallback
+    : candidate
+}
+process.env.XDG_CONFIG_HOME = repositoryPath(process.env.XDG_CONFIG_HOME, localWranglerConfig)
+process.env.WRANGLER_REGISTRY_PATH = repositoryPath(process.env.WRANGLER_REGISTRY_PATH, localWranglerRegistry)
+mkdirSync(process.env.XDG_CONFIG_HOME, { recursive: true })
+mkdirSync(process.env.WRANGLER_REGISTRY_PATH, { recursive: true })
 const configuredLogs = resolve(process.env.WRANGLER_LOG_PATH ?? localWranglerLogs)
 const logsRelativeToRepository = relative(repositoryRoot, configuredLogs)
 process.env.WRANGLER_LOG_PATH = logsRelativeToRepository === '..' ||

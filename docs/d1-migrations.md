@@ -8,6 +8,27 @@ Check migration history before code that depends on a migration is deployed. Any
 remote check or migration requires Product Owner authorization for that operation
 and both explicit safety opt-ins described below.
 
+## P0 migration and credential policy
+
+- Apply every migration to isolated local D1 first and validate its schema and
+  data effects. Routine Codex work, tests and CI must not access Cloudflare.
+- A migration that copies or rebuilds an existing table requires a written
+  scan-risk assessment covering affected tables, expected rows, indexes, query
+  plans and growth behavior before remote review.
+- Codex never applies remote migrations automatically. Staging and production
+  each require separate, narrowly scoped Product Owner authorization for every
+  remote action; approval for one environment or operation does not cover another.
+- Remote verification stays bounded and metadata-only. A full-table scan needs
+  separate explicit authorization for that verification.
+- Ordinary CI must never apply migrations to a remote database.
+- Routine Codex execution must have no Cloudflare, Google or Gemini credentials,
+  no accessible cached Wrangler authentication, and no secret bindings in local
+  Worker processes. Local npm safety wrappers clear process credentials, isolate
+  Wrangler state and block non-loopback Node network access; local Worker config
+  excludes `.dev.vars` secrets. Direct
+  `wrangler`/`npx wrangler` commands bypass those repository wrappers and are not
+  permitted for remote operations.
+
 `0004_normalize_vocabulary_ownership.sql` resets prototype flashcards, reviews,
 stats and selected levels rather than backfilling disposable learning data. It
 must only be applied remotely through a separately approved staging operation.

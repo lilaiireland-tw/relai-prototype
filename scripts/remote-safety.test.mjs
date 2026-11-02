@@ -4,6 +4,7 @@ import { URL } from 'node:url'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
 import { test } from 'node:test'
+import { unstable_readConfig as readConfig } from 'wrangler'
 import { remoteApprovalEnv, requireRemoteApproval } from './cloudflare-approval.mjs'
 import { assertLocalNetworkTarget } from './deny-remote-network.mjs'
 
@@ -23,7 +24,42 @@ test('isolated checks block Cloudflare and Google hosts and allow loopback servi
   await assert.rejects(globalThis.fetch('https://generativelanguage.googleapis.com/'), /Blocked remote network access/)
 })
 
-test('guarded commands keep Wrangler logs in the repository', () => {
+test('local npm entry points use the credential and network isolation wrapper', () => {
+  const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  for (const name of [
+    'dev', 'build', 'build:production', 'preview', 'lint', 'typecheck', 'verify:d1-config',
+    'verify:staging-build', 'test:e2e:report', 'test:e2e:trace', 'db:migrations:create',
+    'db:migrations:list:local', 'db:migrations:apply:local',
+  ]) assert.match(scripts[name], /deny-remote-network\.mjs/)
+  for (const name of ['test', 'test:d1-schema', 'test:persistence', 'test:auth', 'test:auth-api', 'test:e2e']) {
+    assert.match(scripts[name], /run-isolated-tests\.mjs/)
+  }
+})
+
+test('staging and production local Workers do not bind .dev.vars secrets', async () => {
+  for (const env of ['staging', 'production']) {
+    const config = await readConfig({ config: 'wrangler.jsonc', env })
+    assert.deepEqual(config.secrets, { required: [] })
+  }
+})
+
+test('local network guard clears Cloudflare and Google credentials before command code runs', () => {
+  const names = [
+    'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CF_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID',
+    'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'GEMINI_API_KEY',
+  ]
+  const env = { ...process.env, ...Object.fromEntries(names.map(name => [name, 'local-safety-test-sentinel'])) }
+  const probe = `import process from 'node:process'; process.exitCode = ${JSON.stringify(names)}.some(name => process.env[name] !== '') ? 1 : 0`
+  const result = spawnSync(process.execPath, [
+    '--import', new URL('./deny-remote-network.mjs', import.meta.url).href,
+    '--input-type=module', '-e', probe,
+  ], { env, encoding: 'utf8' })
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('guarded commands keep Wrangler configuration, registry and logs in the repository', () => {
+  assert.match(process.env.XDG_CONFIG_HOME ?? '', /\.wrangler[\\/](?:e2e[\\/]config|local[\\/]config)$/)
+  assert.match(process.env.WRANGLER_REGISTRY_PATH ?? '', /\.wrangler[\\/](?:e2e[\\/]registry|local[\\/]registry)$/)
   assert.match(process.env.WRANGLER_LOG_PATH ?? '', /\.wrangler[\\/]logs$/)
 })
 
@@ -42,6 +78,12 @@ test('CI strips Cloudflare and Google credentials from both jobs', () => {
     assert.match(section, /CLOUDFLARE_API_TOKEN:\s*''/)
     assert.match(section, /GEMINI_API_KEY:\s*''/)
   }
+})
+
+test('ordinary CI never invokes remote migrations or deployment', () => {
+  const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  assert.doesNotMatch(ci, /db:migrations:apply|wrangler[^\n]*--remote|npm run deploy/)
+  assert.match(ci, /npm run test:e2e/)
 })
 
 test('remote Wrangler package scripts route through the fail-closed wrapper', () => {

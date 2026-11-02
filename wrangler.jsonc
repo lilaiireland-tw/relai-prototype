@@ -25,6 +25,9 @@
       "vars": {
         "GEMINI_MODEL": "gemini-3.1-flash-lite"
       },
+      "secrets": {
+        "required": []
+      },
       "observability": {
         "enabled": true,
         "logs": {
@@ -43,6 +46,9 @@
     },
     "production": {
       "name": "relai-prototype",
+      "secrets": {
+        "required": []
+      },
       "d1_databases": [
         {
           "binding": "DB",
