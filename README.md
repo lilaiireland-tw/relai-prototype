@@ -23,7 +23,7 @@ Worker 使用不透明、有效期七天的工作階段 cookie，設定 `HttpOnl
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql` `0003_add_cefr_j_vocabulary_foundation.sql`、`0004_normalize_vocabulary_ownership.sql`。遠端 migration 必須由操作人員明確執行，與 CI、部署分開；Playwright 僅自動套用隔離本機 D1 的 migration。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)與 [migration 流程](docs/d1-migrations.md)。
+`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql`、`0002_add_users_must_change_password.sql`、`0003_add_cefr_j_vocabulary_foundation.sql`、`0004_normalize_vocabulary_ownership.sql`。遠端 migration 必須由操作人員明確執行，與 CI、部署分開；Playwright 僅自動套用隔離本機 D1 的 migration。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)與 [migration 流程](docs/d1-migrations.md)。
 
 ## 儲存庫結構
 
