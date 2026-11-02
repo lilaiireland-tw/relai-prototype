@@ -22,6 +22,9 @@
       "name": "relai-prototype-staging",
       "workers_dev": true,
       "routes": [],
+      "vars": {
+        "GEMINI_MODEL": "gemini-3.1-flash-lite"
+      },
       "observability": {
         "enabled": true,
         "logs": {
