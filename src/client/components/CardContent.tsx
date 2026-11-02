@@ -42,6 +42,13 @@ export default function CardContent({ card, flipped }: { card: Flashcard; flippe
       <h3 className="text-sm font-semibold text-text-secondary">例句中文翻譯</h3>
       <p className="mt-1 text-base leading-relaxed text-text-primary">{card.zh_tw_example_translation || '尚未提供'}</p>
      </section>
+     {(card.usage_patterns ?? []).map((usage, index) => <section key={`${usage.pattern}-${index}`}>
+      <h3 className="text-sm font-semibold text-text-secondary">用法搭配</h3>
+      <p className="mt-1 text-base font-medium text-text-primary">{usage.pattern}</p>
+      <p className="text-sm leading-relaxed text-text-secondary">{usage.zh_tw_explanation}</p>
+      <p className="mt-1 text-sm text-text-primary">{usage.example}</p>
+      <p className="text-sm text-text-secondary">{usage.zh_tw_example_translation}</p>
+     </section>)}
      {card.irish_usage && <section className="rounded-xl bg-irish-green/10 p-3">
       <h3 className="text-sm font-semibold text-irish-green">Irish usage</h3>
       <p className="mt-1 text-sm leading-relaxed text-text-primary">{card.irish_usage}</p>

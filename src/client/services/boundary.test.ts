@@ -28,7 +28,9 @@ it('centralizes all client fetch calls in the API module, never components or pa
       if (entry.isDirectory()) { inspect(path); continue }
       if (!/\.tsx?$/.test(entry.name) || entry.name.endsWith('.test.ts')) continue
       const text = readFileSync(path, 'utf8')
-      expect(text).not.toMatch(/localStorage|sessionStorage|indexedDB|document\.cookie|\bBearer\b|\bJWT\b|Authorization/)
+      if (path !== join(clientRoot, 'lib', 'image-job-storage.ts')) {
+        expect(text).not.toMatch(/localStorage|sessionStorage|indexedDB|document\.cookie|\bBearer\b|\bJWT\b|Authorization/)
+      }
       expect(text).not.toMatch(/DemoSession/)
       if (!path.includes(`${join('client', 'testing')}`)) {
         expect(text).not.toMatch(/from ['"].*(?:mock|testing|fixtures)/)

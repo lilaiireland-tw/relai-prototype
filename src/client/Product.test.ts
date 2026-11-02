@@ -14,6 +14,7 @@ describe('Phase 4 authenticated product UI', () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubEnv('BASE_URL', '/relaiapp/')
   mustChange = false
+  window.localStorage.clear()
   server = productServer()
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
    if (String(url).endsWith('/auth/me')) return Response.json({ user: { id: 'owner', username: 'Alex', display_name: 'Alex', role: 'user', must_change_password: mustChange } })
@@ -135,7 +136,7 @@ describe('Phase 4 authenticated product UI', () => {
   expect(requests('/onboarding/level')).toHaveLength(1)
  })
 
- it('automatically saves recognized words and links directly to their cards', async () => {
+ it('submits a durable image job, polls persisted results and links directly to the created cards', async () => {
   await renderAt('capture')
   const input = container.querySelector<HTMLInputElement>('input[type="file"][aria-label="從裝置選擇照片"]')!
   const file = new File([new Uint8Array([137, 80, 78, 71])], 'lesson.png', { type: 'image/png' })
@@ -145,11 +146,12 @@ describe('Phase 4 authenticated product UI', () => {
   })
   await click(button('辨識並建立單字卡'))
   expect(container.textContent).toContain('She was curious about the old map.')
-  const uploadCall = requests('/vocabulary/image', 'POST')[0][1]!
+  const uploadCall = requests('/vocabulary/image-jobs', 'POST')[0][1]!
   expect(uploadCall.body).toBeInstanceOf(FormData)
   expect(new Headers(uploadCall.headers).has('Content-Type')).toBe(false)
-  const saveCall = requests('/vocabulary/save', 'POST')[0][1]!
-  expect(JSON.parse(String(saveCall.body)).items.map((item: { headword: string }) => item.headword)).toEqual(['curious', 'map'])
+  expect(new Headers(uploadCall.headers).get('Idempotency-Key')).toMatch(/^[\da-f-]{36}$/i)
+  expect(requests('/vocabulary/image-jobs/00000000-0000-4000-8000-000000000001')).toHaveLength(1)
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(0)
   expect(container.textContent).toContain('已建立 2 張單字卡')
   const link = container.querySelector<HTMLAnchorElement>('a[href^="/relaiapp/cards/"]')!
   expect(link).toBeTruthy()
@@ -173,8 +175,10 @@ describe('Phase 4 authenticated product UI', () => {
   const fallback = server.response
   server.response = (url, init) => {
    const path = new URL(url, 'https://example.test').pathname
-   if (path.endsWith('/vocabulary/image')) return Response.json({ contract_version: 1, source_item_id: sourceId,
-    suggestions: [ambiguous.item] })
+   if (path.endsWith('/vocabulary/image-jobs') && init?.method === 'POST') return Response.json({ job_id: sourceId, status: 'queued',
+    quota: { limit: 5, used: 1, remaining: 4, resets_at: '2027-01-03T00:00:00.000Z' } }, { status: 202 })
+   if (path.endsWith(`/vocabulary/image-jobs/${sourceId}`)) return Response.json({ job_id: sourceId, status: 'completed',
+    stage: 'completed', error_code: null, suggestions: [ambiguous.item], results: [ambiguous], cards: [] })
    if (path.endsWith('/vocabulary/save')) {
     const items = JSON.parse(String(init?.body)).items as { semantic_sense: string }[]
     return items[0].semantic_sense === 'land beside a river'
@@ -190,10 +194,10 @@ describe('Phase 4 authenticated product UI', () => {
    input.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await click(button('辨識並建立單字卡'))
-  expect(requests('/vocabulary/save', 'POST')).toHaveLength(1)
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(0)
   expect(container.textContent).toContain('無法安全判斷「bank」的詞義')
   await click(button('使用「land beside a river」'))
-  expect(requests('/vocabulary/save', 'POST')).toHaveLength(2)
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(1)
   expect(container.textContent).toContain('已建立 1 張單字卡')
   expect(container.querySelector(`a[href="/relaiapp/cards/${cardId}"]`)).toBeTruthy()
  })

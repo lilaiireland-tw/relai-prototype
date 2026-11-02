@@ -19,6 +19,20 @@ const completeContent = {
   zh_tw_example_translation: '她對那張舊地圖感到好奇。',
 }
 const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJ8AAAAASUVORK5CYII=', 'base64'))
+const storedImages = new Map<string, Uint8Array>()
+const queueSend = vi.fn(async (message: { job_id: string }) => { void message.job_id })
+const imageBindings = {
+  IMAGE_JOBS: { send: queueSend },
+  IMAGE_STORAGE: {
+    async put(key: string, value: Uint8Array) { storedImages.set(key, new Uint8Array(value)) },
+    async get(key: string) {
+      const value = storedImages.get(key)
+      return value ? { async arrayBuffer() { return new Uint8Array(value).buffer as ArrayBuffer } } : null
+    },
+    async delete(key: string) { storedImages.delete(key) },
+    async list() { return { objects: [...storedImages.keys()].map(key => ({ key, uploaded: new Date(now) })), truncated: false } },
+  },
+}
 
 function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
   type Executable = PersistenceStatement & { execute(): { changes: number | bigint } }
@@ -62,7 +76,7 @@ describe('authenticated canonical image vocabulary', () => {
   let sqlite: DatabaseSync
   let db: PersistenceDatabase
   const app = createApp()
-  const bindings = { GEMINI_API_KEY: 'synthetic-test-key', GEMINI_MODEL: 'gemini-3.8-flash' }
+  const bindings = { GEMINI_API_KEY: 'synthetic-test-key', GEMINI_MODEL: 'gemini-3.8-flash', ...imageBindings }
 
   beforeEach(() => {
     sqlite = new DatabaseSync(':memory:')
@@ -71,6 +85,7 @@ describe('authenticated canonical image vocabulary', () => {
       sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
     }
     db = sqliteD1(sqlite)
+    storedImages.clear(); queueSend.mockClear()
   })
   afterEach(() => { sqlite.close(); vi.unstubAllGlobals() })
 
@@ -91,15 +106,19 @@ describe('authenticated canonical image vocabulary', () => {
       (id, user_id, source_type, raw_text, processing_status, ai_model, created_at, updated_at)
       VALUES (?, ?, 'image', ?, 'processed', 'gemini-3.8-flash', ?, ?)`)
       .bind(id, userId, JSON.stringify({ version: 1, suggestions: items }), now, now).run()
+    await db.prepare(`INSERT INTO image_vocabulary_jobs (job_id, user_id, idempotency_key, image_hash, mime_type,
+      quota_date, status, stage, results_json, next_dispatch_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'test-hash', 'image/png', '2027-01-02', 'completed', 'completed', NULL, ?, ?, ?)`)
+      .bind(id, userId, crypto.randomUUID(), now, now, now).run()
     return id
   }
 
-  function upload(cookie: string | undefined, file: File, extra = false) {
+  function upload(cookie: string | undefined, file: File, extra = false, key = crypto.randomUUID()) {
     const form = new FormData()
     form.append('image', file)
     if (extra) form.append('other', 'ignored')
-    return app.request('https://example.test/relaiapp/api/v1/vocabulary/image', {
-      method: 'POST', headers: cookie ? { Cookie: cookie } : {}, body: form,
+    return app.request('https://example.test/relaiapp/api/v1/vocabulary/image-jobs', {
+      method: 'POST', headers: cookie ? { Cookie: cookie, 'Idempotency-Key': key } : {}, body: form,
     }, { DB: db, AUTH_PEPPER: 'synthetic', ...bindings })
   }
 
@@ -129,30 +148,26 @@ describe('authenticated canonical image vocabulary', () => {
     return id
   }
 
-  it('recognizes a real image into a versioned context-only contract and stores no image bytes', async () => {
+  it('accepts a valid image as a durable 202 job and sends only its id to the Queue', async () => {
     const cookie = await session('owner')
     const payload = { version: 1, suggestions: [suggestion] }
     const gemini = vi.fn<typeof fetch>().mockResolvedValue(modelOutput(payload))
     vi.stubGlobal('fetch', gemini)
     const response = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
-    expect(response.status).toBe(200)
-    const result = await response.json() as { contract_version: number; source_item_id: string; suggestions: VocabularySuggestion[] }
-    expect(result).toMatchObject({ contract_version: 1, suggestions: [suggestion] })
-    expect(gemini).toHaveBeenCalledOnce()
-    const [url, request] = gemini.mock.calls[0]
-    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions')
-    expect(new Headers(request?.headers).get('x-goog-api-key')).toBe('synthetic-test-key')
-    expect(JSON.stringify(request?.body)).not.toContain('synthetic-test-key')
-    const source = sqlite.prepare('SELECT user_id, raw_text, ai_model FROM source_items').get() as {
-      user_id: string; raw_text: string; ai_model: string
-    }
-    expect(source).toMatchObject({ user_id: 'owner', ai_model: 'gemini-3.8-flash' })
-    expect(JSON.parse(source.raw_text)).toEqual(payload)
-    expect(source.raw_text).not.toContain(Buffer.from(png).toString('base64'))
+    expect(response.status).toBe(202)
+    const result = await response.json() as { job_id: string; status: string; quota: { used: number; remaining: number } }
+    expect(result).toMatchObject({ job_id: expect.any(String), status: 'received', quota: { used: 1, remaining: 4 } })
+    expect(gemini).not.toHaveBeenCalled()
+    expect(queueSend).toHaveBeenCalledWith({ job_id: result.job_id }, { contentType: 'json' })
+    expect(queueSend.mock.calls[0][0]).toEqual({ job_id: result.job_id })
+    expect(storedImages.has(`image-jobs/${result.job_id}`)).toBe(true)
+    expect(sqlite.prepare('SELECT id FROM source_items').all()).toEqual([])
+    expect(sqlite.prepare('SELECT status, dispatch_attempts FROM image_vocabulary_jobs WHERE job_id = ?').get(result.job_id))
+      .toEqual({ status: 'queued', dispatch_attempts: 1 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
   })
 
-  it('rejects unauthenticated, malformed uploads, unsupported models and invalid structured output', async () => {
+  it('rejects unauthenticated and malformed uploads before quota or Queue work', async () => {
     expect((await upload(undefined, new File([png], 'sample.png', { type: 'image/png' }))).status).toBe(401)
     const cookie = await session('owner')
     const gemini = vi.fn<typeof fetch>().mockResolvedValue(modelOutput({ version: 1, suggestions: [] }))
@@ -160,12 +175,14 @@ describe('authenticated canonical image vocabulary', () => {
     expect((await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }), true)).status).toBe(400)
     expect((await upload(cookie, new File([png], 'sample.jpg', { type: 'image/jpeg' }))).status).toBe(415)
     expect((await upload(cookie, new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' }))).status).toBe(413)
-    const badModel = await app.request('https://example.test/relaiapp/api/v1/vocabulary/image', {
-      method: 'POST', headers: { Cookie: cookie }, body: (() => { const form = new FormData(); form.append('image', new File([png], 'sample.png', { type: 'image/png' })); return form })(),
+    const badModel = await app.request('https://example.test/relaiapp/api/v1/vocabulary/image-jobs', {
+      method: 'POST', headers: { Cookie: cookie, 'Idempotency-Key': crypto.randomUUID() }, body: (() => { const form = new FormData(); form.append('image', new File([png], 'sample.png', { type: 'image/png' })); return form })(),
     }, { DB: db, AUTH_PEPPER: 'synthetic', GEMINI_API_KEY: 'test', GEMINI_MODEL: 'gemini-3.8-flash-tts' })
     expect(badModel.status).toBe(503)
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(modelOutput({ suggestions: [{ ...suggestion, confidence: 'high' }] })))
-    expect((await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))).status).toBe(502)
+    const accepted = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
+    expect(accepted.status).toBe(202)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({ count: 0 })
   })
 
@@ -239,6 +256,40 @@ describe('authenticated canonical image vocabulary', () => {
       .toEqual({ vocabulary_catalog_id: catalog.id })
     expect(sqlite.prepare('SELECT source_item_id FROM flashcards WHERE user_id = ?').get('owner'))
       .toEqual({ source_item_id: sourceId })
+  })
+
+  it('generates concise Taiwan dictionary meanings and versions up to two shared usage patterns', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const usagePatterns = [
+      { pattern: 'be curious about + noun', zh_tw_explanation: '對……感到好奇',
+        example: 'She is curious about the map.', zh_tw_example_translation: '她對地圖感到好奇。' },
+      { pattern: 'curious to + verb', zh_tw_explanation: '好奇想知道……',
+        example: 'I was curious to see what happened.', zh_tw_example_translation: '我很好奇接下來發生了什麼。' },
+    ]
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(modelOutput({ version: 1,
+      items: [{ item_index: 0, zh_tw_definition: '好奇的；求知的',
+        english_example: 'She was curious about the map.', zh_tw_example_translation: '她對那張地圖感到好奇。',
+        usage_patterns: usagePatterns }] }))
+    vi.stubGlobal('fetch', fetch)
+    const response = await save(cookie, sourceId, [selection(suggestion)])
+    const result = await response.json() as { results: { status: string }[]; cards: { usage_patterns: unknown[] }[] }
+    expect(result.results[0].status).toBe('saved')
+    expect(result.cards[0].usage_patterns).toEqual(usagePatterns)
+    const prompt = JSON.parse(String(fetch.mock.calls[0][1]?.body)) as { input: string }
+    expect(prompt.input).toContain('1–3 concise, idiomatic Taiwan Traditional Chinese dictionary equivalents')
+    expect(prompt.input).toContain('「；」')
+    expect(prompt.input).toContain('part_of_speech')
+    expect(prompt.input).toContain('source_context')
+    expect(prompt.input).toContain('She used to walk to work.')
+    expect(prompt.input).toContain('She is used to walking to work.')
+    expect(prompt.input).toContain('She used a map to find the station.')
+    const catalog = sqlite.prepare(`SELECT zh_tw_definition, usage_patterns FROM vocabulary_catalog WHERE normalized_key = 'curious'`)
+      .get() as { zh_tw_definition: string; usage_patterns: string }
+    expect(catalog).toEqual({ zh_tw_definition: '好奇的；求知的', usage_patterns: JSON.stringify(usagePatterns) })
+    const version = sqlite.prepare(`SELECT usage_patterns FROM vocabulary_catalog_versions WHERE catalog_id =
+      (SELECT id FROM vocabulary_catalog WHERE normalized_key = 'curious')`).get() as { usage_patterns: string }
+    expect(JSON.parse(version.usage_patterns)).toEqual(usagePatterns)
   })
 
   it('keeps two senses of bank as separate canonical IDs', async () => {

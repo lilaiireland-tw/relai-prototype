@@ -1,5 +1,6 @@
 import { mutate, type PersistenceDatabase, type SqlValue } from './d1'
 import type { CardType, EditableFlashcard, FlashcardRow, SqlBoolean } from './types'
+import { parseUsagePatterns } from '../../shared/usage-pattern'
 
 const columns = `card.id, card.user_id, card.source_item_id, card.card_type,
   CASE WHEN card.card_type = 'error_log' THEN card.front_content ELSE catalog.headword END AS front_content,
@@ -13,6 +14,7 @@ const columns = `card.id, card.user_id, card.source_item_id, card.card_type,
   CASE WHEN card.card_type = 'error_log' THEN card.zh_tw_definition ELSE catalog.zh_tw_definition END AS zh_tw_definition,
   CASE WHEN card.card_type = 'error_log' THEN NULL ELSE catalog.english_example END AS english_example,
   CASE WHEN card.card_type = 'error_log' THEN NULL ELSE catalog.zh_tw_example_translation END AS zh_tw_example_translation,
+  CASE WHEN card.card_type = 'error_log' THEN '[]' ELSE COALESCE(catalog.usage_patterns, '[]') END AS usage_patterns,
   card.explanation,
   CASE WHEN card.card_type = 'error_log' THEN card.irish_usage ELSE catalog.irish_usage END AS irish_usage,
   CASE WHEN card.card_type = 'error_log' THEN card.source
@@ -21,8 +23,9 @@ const columns = `card.id, card.user_id, card.source_item_id, card.card_type,
 const joins = `FROM flashcards AS card
   LEFT JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
     AND (catalog.publication_status = 'published' OR catalog.owner_user_id = card.user_id)`
-type StoredCard = Omit<FlashcardRow, 'is_favorite'> & { is_favorite: SqlBoolean }
-const mapCard = (row: StoredCard): FlashcardRow => ({ ...row, is_favorite: row.is_favorite === 1 })
+type StoredCard = Omit<FlashcardRow, 'is_favorite' | 'usage_patterns'> & { is_favorite: SqlBoolean; usage_patterns: string | null }
+const mapCard = (row: StoredCard): FlashcardRow => ({ ...row, is_favorite: row.is_favorite === 1,
+  usage_patterns: parseUsagePatterns(row.usage_patterns) })
 const editable = ['front_content', 'back_content', 'part_of_speech',
   'zh_tw_definition', 'explanation', 'irish_usage', 'source'] as const
 

@@ -15,7 +15,9 @@ export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
   assert.ok(tables.length > 0, 'PRD must define application tables')
   const initialSchema = schema()
   assert.deepEqual(initialSchema.filter((row) => row.type === 'table').map((row) => row.name).sort(), [...tables].sort())
-  assert.ok(initialSchema.every((row) => ['table', 'index'].includes(row.type)), 'No triggers or views')
+  assert.ok(initialSchema.every((row) => ['table', 'index', 'trigger'].includes(row.type)), 'No views')
+  assert.ok(initialSchema.some((row) => row.type === 'trigger' && row.name === 'image_vocabulary_jobs_daily_limit'),
+    'Daily image quota must be enforced in D1')
 
   const indexLists = execute(tables.map((table) =>
     `PRAGMA index_list('${table}');`).join('\n'))
@@ -54,6 +56,9 @@ export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
         { id: 0, seq: 0, table: 'vocabulary_catalog', from: 'catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
         { id: 1, seq: 0, table: 'vocabulary_catalog', from: 'target_catalog_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
       ],
+      image_vocabulary_jobs: [
+        { id: 0, seq: 0, table: 'users', from: 'user_id', to: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION', match: 'NONE' },
+      ],
     }
     assert.deepEqual(foreignKeys, expectedForeignKeys[table] ?? [], `${table}: unexpected foreign keys`)
     if (requireEmpty) assert.equal(query(`SELECT COUNT(*) AS count FROM ${table}`)[0].count, 0, 'Clean migration replay must not seed data')
@@ -74,6 +79,8 @@ export function verifyCoreSchema(execute, { requireEmpty = true } = {}) {
   ]) assert.ok(hasIndex(table, columns), `${table}(${columns}) index required`)
   assert.ok(hasIndex('user_vocabulary_items', ['user_id', 'normalized_key'], true),
     'Personal vocabulary identity must be unique per user')
+  assert.ok(hasIndex('image_vocabulary_jobs', ['user_id', 'idempotency_key'], true),
+    'Image job idempotency must be unique per user')
   for (const name of ['idx_vocabulary_catalog_published_sense', 'idx_vocabulary_catalog_private_sense']) {
     assert.ok(indexDescriptors.some((index) => index.table_name === 'vocabulary_catalog' &&
       index.index_name === name && index.is_unique === 1), `Catalog sense identity index ${name} must be unique`)

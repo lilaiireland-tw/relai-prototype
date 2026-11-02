@@ -45,3 +45,12 @@ release must be coordinated by an operator. See the B5.4 section in
 [the migration workflow](../docs/d1-migrations.md) for backup, rehearsal and
 verification steps. No remote D1 migration is performed by ordinary tests, CI,
 build or deployment.
+
+`0006_durable_image_vocabulary_jobs.sql` adds optional canonical usage-pattern
+JSON to catalog records, versions, and legacy candidates, plus the durable image
+job ledger, indexes, and a trigger that atomically limits each user's accepted
+jobs to five per Europe/Dublin date. It preserves all existing rows and applied
+migrations. The staging Queue and private R2 names are configured separately in
+`wrangler.jsonc`; operators must provision those resources and apply 0006 to
+staging before releasing the new capture route. See
+[image vocabulary jobs](../docs/image-vocabulary-jobs.md).

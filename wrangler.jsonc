@@ -39,7 +39,20 @@
           "database_id": "41ead93a-40f6-4016-b49c-df00a18e86da",
           "migrations_dir": "migrations"
         }
-      ]
+      ],
+      "r2_buckets": [
+        { "binding": "IMAGE_STORAGE", "bucket_name": "relai-vocabulary-images-staging" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "IMAGE_JOBS", "queue": "relai-vocab-image-jobs-staging" }
+        ],
+        "consumers": [
+          { "queue": "relai-vocab-image-jobs-staging", "max_batch_size": 1, "max_retries": 5,
+            "retry_delay": 30, "dead_letter_queue": "relai-vocab-image-jobs-staging-dlq", "max_concurrency": 5 }
+        ]
+      },
+      "triggers": { "crons": ["* * * * *"] }
     },
     "production": {
       "name": "relai-prototype",

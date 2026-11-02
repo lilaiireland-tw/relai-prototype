@@ -1,9 +1,12 @@
+import type { UsagePattern } from '../../shared/usage-pattern'
+
 export interface Flashcard {
  id: string; user_id: string; source_item_id: string | null
  card_type: 'vocabulary' | 'error_log'
  front_content: string; back_content: string
  part_of_speech: string | null; zh_tw_definition: string | null
  english_example?: string | null; zh_tw_example_translation?: string | null
+ usage_patterns?: UsagePattern[]
  explanation: string | null; irish_usage: string | null
  source: string | null; is_favorite: boolean
  last_reviewed_at: string | null; next_review_at: string | null

@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import { ENGLISH_LEVELS } from '../services/types'
+import { usagePatternSchema } from '../../shared/usage-pattern'
 
 const nullableText = z.string().nullable()
 export const cardSchema = z.object({
  id: z.string(), user_id: z.string(), source_item_id: nullableText,
  card_type: z.enum(['vocabulary', 'error_log']), front_content: z.string(), back_content: z.string(),
  part_of_speech: nullableText, zh_tw_definition: nullableText, english_example: nullableText.optional(),
- zh_tw_example_translation: nullableText.optional(), explanation: nullableText,
+ zh_tw_example_translation: nullableText.optional(), usage_patterns: z.array(usagePatternSchema).max(2).default([]), explanation: nullableText,
  irish_usage: nullableText, source: nullableText, is_favorite: z.boolean(),
  last_reviewed_at: nullableText, next_review_at: nullableText, created_at: z.string(), updated_at: z.string(),
 })
@@ -44,3 +45,18 @@ export const vocabularySaveResponse = z.strictObject({
  ])),
  cards: z.array(cardSchema),
 })
+export const imageQuotaResponse = z.strictObject({
+ limit: z.literal(5), used: z.number().int().min(0), remaining: z.number().int().min(0), resets_at: z.string().datetime(),
+})
+export const imageJobResponse = z.object({
+ job_id: z.string().uuid(),
+ status: z.enum(['received', 'queued', 'recognizing', 'recognized', 'enriching', 'saving', 'completed', 'failed', 'needs_attention']),
+ stage: z.string(), error_code: z.string().nullable(),
+ suggestions: z.array(vocabularySuggestionSchema).max(10).optional(),
+ results: vocabularySaveResponse.shape.results.optional(), cards: z.array(cardSchema).optional(),
+})
+export const imageJobAcceptedResponse = z.object({
+ job_id: z.string().uuid(), status: z.enum(['received', 'queued', 'recognizing', 'recognized', 'enriching', 'saving', 'completed', 'failed', 'needs_attention']),
+ quota: imageQuotaResponse,
+})
+export type ImageJobAccepted = z.infer<typeof imageJobAcceptedResponse>
