@@ -59,6 +59,7 @@ describe('users and sessions persistence', () => {
       '0001_initial_core_schema.sql', '0002_add_users_must_change_password.sql',
       '0003_add_cefr_j_vocabulary_foundation.sql', '0004_normalize_vocabulary_ownership.sql',
       '0005_canonical_sense_aware_vocabulary.sql', '0006_durable_image_vocabulary_jobs.sql',
+      '0007_image_storage_cleanup_cursor.sql',
     ])
     const legacy = new DatabaseSync(':memory:')
     try {
