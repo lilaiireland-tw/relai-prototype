@@ -6,6 +6,7 @@ Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quot
 
 ## Session and recovery API
 
+- `GET /relaiapp/api/v1/vocabulary/image-jobs/latest`: the authenticated user's most recently submitted job, including completed, failed and abandoned jobs, or 404 for an empty history. Uses `WHERE user_id = ? ORDER BY created_at DESC LIMIT 1` and the existing `idx_image_vocabulary_jobs_user_created` index from migration 0006. Persisted suggestions/results/cards use the existing status serializer; this read never dispatches Queue work or calls Gemini. Event-driven timeout marks stale active jobs before returning their final state.
 - `GET /relaiapp/api/v1/vocabulary/image-jobs/current`: the authenticated user's active session, or 404.
 - `GET /relaiapp/api/v1/vocabulary/image-jobs/:id` and `/by-key/:key`: owner-scoped persisted results; these never call Gemini.
 - `POST /relaiapp/api/v1/vocabulary/image-jobs/:id/abandon`: owner-scoped, idempotent explicit abandonment. Completed/terminal jobs remain unchanged.
@@ -13,7 +14,7 @@ Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quot
 
 A single atomic INSERT/NOT EXISTS statement enforces admission across tabs/devices. Admin recovery uses the same active-session predicate. A partial user/creation index bounds these checks to active jobs. The five accepted uploads/day trigger and user/key uniqueness remain authoritative. Abandonment/failure does not refund quota. Existing historical concurrent jobs are not rewritten; new admission waits until they finish or expire.
 
-The client waits for one task, polls only its job up to eight times with 1/2/4/8-second backoff (8-second cap), then offers explicit status-check/abandon controls. Reload discovers the server's current session before using a saved ID/key. Success displays persisted cards; failure/abandonment allows selecting another photo. No timer runs when capture is idle. A stale session expires after ten minutes from acceptance, only on a user request or delivery event. This bounds abandoned/DLQ locks without a global scanner.
+The client waits for one task, polls only its job up to eight times with 1/2/4/8-second backoff (8-second cap), then offers explicit status-check/abandon controls. Every page opening/reload discovers the latest job from the authenticated server, including terminal states, without reading or writing localStorage for recovery. An active job resumes bounded polling; a completed job displays persisted results/cards; failed or abandoned jobs display their final state and permit a new upload. A 404 leaves the initial upload interface empty. Browser IDs/keys remain useful only for upload idempotency and uncertain upload-response lookup, not recovery correctness. No timer runs when capture is idle. A stale session expires after ten minutes from acceptance, only on a user request or delivery event. This bounds abandoned/DLQ locks without a global scanner.
 
 ## Failure semantics
 

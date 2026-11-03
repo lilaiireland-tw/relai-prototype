@@ -1,7 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { ApiError } from '../lib/api'
-import { clearImageJobReference, imageJobIdempotencyKey, readImageJobReference, saveImageJobId } from '../lib/image-job-storage'
+import { clearImageJobReference, imageJobIdempotencyKey, saveImageJobId } from '../lib/image-job-storage'
 import { clientData } from '../services/data'
 import type { Flashcard, ImageVocabularySuggestion, VocabularySaveResult } from '../services/types'
 
@@ -81,31 +81,19 @@ export default function ImageVocabularyCapture() {
   } finally { setBusy(false) }
  }
 
- useEffect(() => {  void clientData.getImageQuota().then(setQuota).catch(() => undefined)
-  const { key, id } = readImageJobReference()
-
+ useEffect(() => {
+  void clientData.getImageQuota().then(setQuota).catch(() => undefined)
   let active = true
   setBusy(true)
   void (async () => {
    try {
-    let job: ImageJob
-    try {
-     job = await clientData.getCurrentImageJob()
-     if (job.job_id !== id) clearImageJobReference()
-    } catch (error) {
-     if (!(error instanceof ApiError) || error.status !== 404) throw error
-     if (!key && !id) return
-     job = id ? await clientData.getImageJob(id) : await clientData.findImageJobByKey(key!)
-    }
+    const job = await clientData.getLatestImageJob()
     if (!active) return
-    saveImageJobId(job.job_id)
     applyJob(job)
     if (!['completed', 'failed', 'needs_attention'].includes(job.status)) await poll(job.job_id)
    } catch (error) {
-    if (active) {
-     if (error instanceof ApiError && error.status === 404) clearImageJobReference()
-     else if (key) setUncertainKey(key)
-     setMessage(key ? 'Upload status is unclear. Check it before retrying.' : 'Could not restore this image job.')
+    if (active && !(error instanceof ApiError && error.status === 404)) {
+     setMessage('Could not restore this image job. Check again before retrying.')
     }
    } finally { if (active) setBusy(false) }
   })()

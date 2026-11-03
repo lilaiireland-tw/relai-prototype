@@ -3,8 +3,8 @@ import { test, expect } from './fixtures'
 test('restores a recognized job with no saved cards as an explicit failure', async ({ page, login }) => {
   await page.goto('login')
   await login()
-  await page.evaluate(() => localStorage.setItem('relai.image-job.id', '00000000-0000-4000-8000-000000000101'))
-  await page.route('**/api/v1/vocabulary/image-jobs/00000000-0000-4000-8000-000000000101', route => route.fulfill({ json: {
+  await page.evaluate(() => localStorage.clear())
+  await page.route('**/api/v1/vocabulary/image-jobs/latest', route => route.fulfill({ json: {
     job_id: '00000000-0000-4000-8000-000000000101', status: 'failed', stage: 'failed', error_code: 'NO_CARDS_SAVED',
     suggestions: [{ headword: 'map', part_of_speech: 'noun', semantic_sense: 'a drawing of an area',
       source_context: 'Read the map.', confidence: 0.99 }],
@@ -29,19 +29,45 @@ test('discovers another device session, locks uploads, and reconnects to persist
     if (request.method() === 'POST' && request.url().endsWith('/vocabulary/image-jobs')) uploads++
     if (request.method() === 'POST' && request.url().endsWith('/vocabulary/save')) saves++
   })
-  await page.route('**/api/v1/vocabulary/image-jobs/current', route => completed
-    ? route.fulfill({ status: 404, json: { error: { code: 'IMAGE_JOB_NOT_FOUND' } } })
-    : route.fulfill({ json: { job_id: id, status: 'queued', stage: 'queued', error_code: null } }))
+  await page.route('**/api/v1/vocabulary/image-jobs/latest', route => route.fulfill({ json: completed
+    ? { job_id: id, status: 'completed', stage: 'completed', error_code: null, suggestions: [], results: [], cards: [] }
+    : { job_id: id, status: 'queued', stage: 'queued', error_code: null } }))
   await page.route('**/api/v1/vocabulary/image-jobs/' + id, route => route.fulfill({ json: completed
     ? { job_id: id, status: 'completed', stage: 'completed', error_code: null, suggestions: [], results: [], cards: [] }
     : { job_id: id, status: 'queued', stage: 'queued', error_code: null } }))
+  await page.evaluate(() => localStorage.clear())
   await page.goto('capture')
   await expect(page.getByRole('button', { name: 'Abandon current job' })).toBeVisible()
   for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeDisabled()
   completed = true
+  await page.evaluate(() => localStorage.clear())
   await page.reload()
   for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeEnabled()
   await expect(page.getByRole('button', { name: 'Abandon current job' })).toHaveCount(0)
   expect(uploads).toBe(0)
   expect(saves).toBe(0)
+})
+
+
+test('no previous job leaves the initial upload state empty', async ({ page, login }) => {
+  await page.goto('login')
+  await login()
+  await page.evaluate(() => localStorage.clear())
+  await page.goto('capture')
+  for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeEnabled()
+  await expect(page.getByRole('status')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Abandon current job' })).toHaveCount(0)
+})
+
+test('discovers an abandoned job without storage and permits a new photo', async ({ page, login }) => {
+  await page.goto('login')
+  await login()
+  await page.evaluate(() => localStorage.clear())
+  await page.route('**/api/v1/vocabulary/image-jobs/latest', route => route.fulfill({ json: {
+    job_id: '00000000-0000-4000-8000-000000000104', status: 'failed', stage: 'abandoned', error_code: 'IMAGE_JOB_ABANDONED',
+  } }))
+  await page.goto('capture')
+  await expect(page.getByRole('status')).toContainText('Image job abandoned.')
+  for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Abandon current job' })).toHaveCount(0)
 })

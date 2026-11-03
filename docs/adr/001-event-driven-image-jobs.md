@@ -8,6 +8,10 @@ Keep the asynchronous Cloudflare Queue backend and unchanged automatic `processI
 
 Remove the scheduled entrypoint and explicitly clear staging Cron triggers. No periodic D1 recovery, cleanup-state query/update, R2 listing or DLQ scanning remains. Retain historical tables and migrations. Replace R2 scans with immediate deletion attempts and an owner-approved manual lifecycle rule. [Operational instructions, failure matrix, migration scan-risk assessment and rollback](../image-vocabulary-jobs.md) are part of this decision.
 
+## Discovery across browser sessions and devices
+
+On page entry, authenticated `GET /vocabulary/image-jobs/latest` reads the user's most recent submitted job, regardless of terminal/active status. `WHERE user_id = ? ORDER BY created_at DESC LIMIT 1` uses the existing `(user_id, created_at DESC)` index; no additional migration is required. The endpoint applies the existing event-driven stale-session timeout and returns persisted results/cards through the existing serializer. It never dispatches, processes, or resumes provider work. Active results trigger only bounded client status polling. Empty history returns 404; failed/abandoned jobs release the upload interface. Page recovery performs no localStorage operations, so missing, stale or unavailable browser storage cannot hide persisted outcomes. Existing ID/key endpoints remain available for explicit upload-response reconciliation.
+
 ## Trade-offs
 
 Unfinished jobs are best effort: bounded safe redelivery can resume checkpoints, but there is no guarantee of eventual processing after interruption, uncertain dispatch or DLQ delivery. Users may abandon, and ten-minute expiry occurs on the next relevant request/event. We prefer this to paid idle recovery. Unknown external outcomes never trigger automatic paid retries. Cancellation cannot undo an external bill or already committed words. Per-word fencing preserves the existing atomic save unit instead of introducing an all-image transaction or manual save phase.

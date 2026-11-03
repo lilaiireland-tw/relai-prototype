@@ -90,6 +90,16 @@ vocabulary.use('*', async (c, next) => { c.header('Cache-Control', 'no-store'); 
 
 vocabulary.get('/image-jobs/quota', async c => c.json(await imageQuota(c.env.DB, c.get('user').id)))
 
+vocabulary.get('/image-jobs/latest', async c => {
+  const userId = c.get('user').id
+  await currentImageJob(c.env, userId)
+  const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
+    FROM image_vocabulary_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`)
+    .bind(userId).first<Parameters<typeof imageJobStatus>[1]>()
+  if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'No previous image job.' } }, 404)
+  return c.json(await imageJobStatus(c.env.DB, job))
+})
+
 vocabulary.get('/image-jobs/current', async c => {
   const job = await currentImageJob(c.env, c.get('user').id)
   if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'No active image job.' } }, 404)

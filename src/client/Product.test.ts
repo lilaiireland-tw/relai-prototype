@@ -187,7 +187,7 @@ describe('Phase 4 authenticated product UI', () => {
   await refreshAt('capture')
   expect(requests('/vocabulary/image-jobs', 'POST')).toHaveLength(1)
   expect(requests('/vocabulary/image-jobs/by-key/' + idempotencyKey)).toHaveLength(1)
-  expect(requests('/vocabulary/image-jobs/00000000-0000-4000-8000-000000000001')).toHaveLength(1)
+  expect(requests('/vocabulary/image-jobs/latest')).toHaveLength(2)
  })
  it('lets the user resolve an ambiguous catalog sense', async () => {
   const sourceId = '00000000-0000-4000-8000-000000000099'

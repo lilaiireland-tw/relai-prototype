@@ -30,6 +30,7 @@ export const clientData = {
  getImageQuota: apiClient.getImageQuota,
  getImageJob: apiClient.getImageJob,
  getCurrentImageJob: apiClient.getCurrentImageJob,
+ getLatestImageJob: apiClient.getLatestImageJob,
  abandonImageJob: apiClient.abandonImageJob,
  findImageJobByKey: apiClient.findImageJobByKey,
  saveVocabulary: apiClient.saveVocabulary,
