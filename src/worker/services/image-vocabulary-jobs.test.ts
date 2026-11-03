@@ -88,6 +88,46 @@ describe('durable image vocabulary jobs', () => {
     } finally { sqlite.close() }
   })
 
+  it('uses the quota, cleanup, and recovery indexes for bounded lookups', () => {
+    const { sqlite } = environment()
+    try {
+      const insert = sqlite.prepare(`INSERT INTO image_vocabulary_jobs
+        (job_id, user_id, idempotency_key, image_hash, image_key, mime_type, quota_date, status, stage,
+          next_dispatch_at, created_at, updated_at)
+        VALUES (?, 'owner', ?, 'synthetic-hash', ?, 'image/png', ?, ?, ?, ?, ?, ?)`)
+      const statuses = ['received', 'queued', 'recognizing', 'recognized', 'enriching', 'saving', 'completed']
+      for (let index = 0; index < 700; index++) {
+        const date = new Date(Date.UTC(2020, 0, index + 1)).toISOString()
+        const status = statuses[index % statuses.length]
+        insert.run('job-' + index, 'key-' + index, 'image-jobs/' + index, date.slice(0, 10), status, status,
+          date, date, date)
+      }
+      const plan = (sql: string, ...values: (string | number | null)[]) => sqlite.prepare('EXPLAIN QUERY PLAN ' + sql)
+        .all(...values).map(row => (row as { detail: string }).detail).join('\n')
+      const quota = plan('SELECT COUNT(*) FROM image_vocabulary_jobs WHERE user_id = ? AND quota_date = ?', 'owner', '2020-01-01')
+      const cleanup = plan('SELECT job_id FROM image_vocabulary_jobs WHERE image_key IN (?, ?)', 'image-jobs/1', 'image-jobs/2')
+      const recovery = plan(`SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
+        SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs
+          WHERE status = 'received' AND next_dispatch_at <= ? ORDER BY next_dispatch_at LIMIT 50
+      ) UNION ALL SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
+        SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs INDEXED BY idx_image_vocabulary_jobs_recovery
+          WHERE status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving') AND updated_at <= ?
+            AND (lease_until IS NULL OR lease_until <= ?) ORDER BY updated_at, created_at LIMIT 50
+      ) LIMIT 50`, '2027-01-02T10:00:00.000Z', '2027-01-02T09:55:00.000Z', '2027-01-02T10:00:00.000Z')
+      expect(quota).toContain('idx_image_vocabulary_jobs_quota')
+      expect(cleanup).toContain('idx_image_vocabulary_jobs_image_key')
+      expect(recovery).toContain('idx_image_vocabulary_jobs_dispatch')
+      expect(recovery).toContain('idx_image_vocabulary_jobs_recovery')
+      expect(recovery).not.toMatch(/SCAN image_vocabulary_jobs|USE TEMP B-TREE/)
+      sqlite.exec('CREATE INDEX idx_status_first_recovery_candidate ON image_vocabulary_jobs(status, updated_at, lease_until, created_at)')
+      const statusFirst = plan(`SELECT job_id FROM image_vocabulary_jobs INDEXED BY idx_status_first_recovery_candidate
+        WHERE status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving') AND updated_at <= ?
+          AND (lease_until IS NULL OR lease_until <= ?) ORDER BY updated_at, created_at LIMIT 50`,
+      '2027-01-02T09:55:00.000Z', '2027-01-02T10:00:00.000Z')
+      expect(statusFirst).toContain('USE TEMP B-TREE FOR ORDER BY')
+    } finally { sqlite.close() }
+  })
+
   it('returns the original job for duplicate key and rejects a changed image without charging twice', async () => {
     const { sqlite, env, sends, objects } = environment()
     try {
@@ -212,7 +252,14 @@ describe('durable image vocabulary jobs', () => {
       env.IMAGE_JOBS = { async send(message) { sends.push(message); if (failFirst) { failFirst = false; throw new Error('queue unavailable') } } }
       const accepted = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
       expect(accepted.job.status).toBe('received')
+      const database = env.DB
+      let dispatchReads = 0
+      env.DB = { ...database, prepare(sql) {
+        if (sql.includes('SELECT dispatch_attempts FROM image_vocabulary_jobs')) dispatchReads++
+        return database.prepare(sql)
+      } }
       await recoverImageJobs(env, new Date(now.getTime() + 60_000))
+      expect(dispatchReads).toBe(0)
       expect(sqlite.prepare('SELECT status FROM image_vocabulary_jobs WHERE job_id = ?').get(accepted.job.job_id))
         .toEqual({ status: 'queued' })
       sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'failed', error_code = 'IMAGE_MISSING' WHERE job_id = ?`)

@@ -4,7 +4,17 @@ import { e2eUser } from '../scripts/e2e-data'
 import { sanitizeTrace } from '../scripts/sanitize-e2e-trace'
 import { resetE2EState } from '../scripts/setup-e2e'
 
-export const test = base.extend<{ login: () => Promise<void>; resetData: void }>({
+export const test = base.extend<{ login: () => Promise<void>; resetData: void; localNetwork: void }>({
+  localNetwork: [async ({ page }, use) => {
+    await page.route('**/*', async (route) => {
+      const url = new URL(route.request().url())
+      if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) {
+        throw new Error(`Blocked remote browser request in isolated ReLai E2E: ${url.origin}`)
+      }
+      await route.continue()
+    })
+    await use()
+  }, { auto: true }],
   // Playwright requires destructured fixture arguments, even when none are needed.
   // eslint-disable-next-line no-empty-pattern
   resetData: [async ({}, use) => { resetE2EState(); await use() }, { auto: true }],

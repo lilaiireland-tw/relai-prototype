@@ -25,6 +25,9 @@
       "vars": {
         "GEMINI_MODEL": "gemini-3.1-flash-lite"
       },
+      "secrets": {
+        "required": ["AUTH_PEPPER", "GEMINI_API_KEY"]
+      },
       "observability": {
         "enabled": true,
         "logs": {
@@ -56,6 +59,9 @@
     },
     "production": {
       "name": "relai-prototype",
+      "secrets": {
+        "required": ["AUTH_PEPPER", "GEMINI_API_KEY"]
+      },
       "d1_databases": [
         {
           "binding": "DB",

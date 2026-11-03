@@ -1,4 +1,5 @@
 import process from 'node:process'
+import { resolve } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
@@ -26,6 +27,8 @@ export default defineConfig({
     timeout: 120_000,
     stdout: 'ignore',
     stderr: 'pipe',
-    env: { CLOUDFLARE_ENV: '', CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false', CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false' },
+    env: { CLOUDFLARE_ENV: '', CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false', CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false',
+      XDG_CONFIG_HOME: resolve('.wrangler/e2e/config'), WRANGLER_REGISTRY_PATH: resolve('.wrangler/e2e/registry'),
+      WRANGLER_LOG_PATH: resolve('.wrangler/e2e/logs') },
   },
 })

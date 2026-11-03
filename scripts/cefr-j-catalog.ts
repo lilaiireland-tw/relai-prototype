@@ -4,6 +4,8 @@ export const DATASET = 'CEFR-J Vocabulary Profile'
 export const VERSION = '1.6'
 export const PROVENANCE = 'The CEFR-J Wordlist Version 1.6. Compiled by Yukio Tono, Tokyo University of Foreign Studies. Retrieved from https://www.cefr-j.org/download.html on 2026-10-01.'
 export const LEVELS = ['A1', 'A2', 'B1', 'B2'] as const
+// shortcut: fixed to the published CEFR-J 1.6 size; update with an independently reviewed source version.
+const MAX_SOURCE_ROWS = 7801
 
 export interface SourceRow {
   headword: unknown
@@ -88,6 +90,7 @@ export function validateManifest(value: unknown): CatalogRow[] {
     throw new Error('Catalog dataset, version, or attribution does not match approved CEFR-J 1.6 metadata.')
   }
   if (manifest.rows.length === 0) throw new Error('Catalog source has no rows.')
+  if (manifest.rows.length > MAX_SOURCE_ROWS) throw new Error(`Catalog source exceeds the ${MAX_SOURCE_ROWS}-row CEFR-J 1.6 limit.`)
   const seen = new Map<string, CatalogRow>()
   return manifest.rows.map((source, index) => {
     const line = index + 1
@@ -125,17 +128,26 @@ export async function importCatalog(db: CatalogDatabase, source: unknown): Promi
     throw new CatalogImportError(error instanceof Error ? error.message : 'Catalog source validation failed.',
       { inserted: 0, skipped: 0, rejected: 1 })
   }
-  const versions = await db.prepare('SELECT DISTINCT source_version FROM vocabulary_catalog_sources WHERE source_dataset = ?')
-    .bind(DATASET).all<{ source_version: string }>()
+  const versions = await db.prepare(`SELECT source_version FROM vocabulary_catalog_sources
+      WHERE source_dataset = ? AND source_version < ?
+    UNION ALL
+    SELECT source_version FROM vocabulary_catalog_sources
+      WHERE source_dataset = ? AND source_version > ?
+    LIMIT 1`).bind(DATASET, VERSION, DATASET, VERSION).all<{ source_version: string }>()
   if (!versions.success) throw new Error('Could not inspect catalog versions.')
   if (versions.results.some(row => row.source_version !== VERSION)) {
     throw new CatalogImportError('A different CEFR-J catalog version already exists; no overwrite was attempted.',
       { inserted: 0, skipped: 0, rejected: rows.length })
   }
   const existing = await db.prepare(`SELECT id, headword, normalized_key, part_of_speech, cefr_level,
-      source_dataset, source_version, provenance FROM vocabulary_catalog_sources WHERE source_dataset = ? AND source_version = ?`)
+      source_dataset, source_version, provenance FROM vocabulary_catalog_sources WHERE source_dataset = ? AND source_version = ?
+      LIMIT ${MAX_SOURCE_ROWS + 1}`)
     .bind(DATASET, VERSION).all<CatalogRow>()
   if (!existing.success) throw new Error('Could not inspect existing catalog rows.')
+  if (existing.results.length > MAX_SOURCE_ROWS) {
+    throw new CatalogImportError(`Existing CEFR-J source exceeds the ${MAX_SOURCE_ROWS}-row read limit; no write was attempted.`,
+      { inserted: 0, skipped: 0, rejected: rows.length })
+  }
   const byIdentity = new Map(existing.results.map(row => [identity(row), row]))
   const incoming = new Map(rows.map(row => [identity(row), row]))
   for (const current of existing.results) {

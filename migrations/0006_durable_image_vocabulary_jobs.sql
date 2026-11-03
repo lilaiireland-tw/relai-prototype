@@ -35,8 +35,12 @@ CREATE TABLE image_vocabulary_jobs (
   UNIQUE (user_id, idempotency_key)
 );
 CREATE INDEX idx_image_vocabulary_jobs_user_created ON image_vocabulary_jobs(user_id, created_at DESC);
+CREATE INDEX idx_image_vocabulary_jobs_quota ON image_vocabulary_jobs(user_id, quota_date);
 CREATE INDEX idx_image_vocabulary_jobs_dispatch ON image_vocabulary_jobs(status, next_dispatch_at);
-CREATE INDEX idx_image_vocabulary_jobs_lease ON image_vocabulary_jobs(status, lease_until);
+CREATE INDEX idx_image_vocabulary_jobs_image_key ON image_vocabulary_jobs(image_key)
+  WHERE image_key IS NOT NULL;
+CREATE INDEX idx_image_vocabulary_jobs_recovery ON image_vocabulary_jobs(updated_at, created_at, lease_until)
+  WHERE status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving');
 
 CREATE TRIGGER image_vocabulary_jobs_daily_limit
 BEFORE INSERT ON image_vocabulary_jobs

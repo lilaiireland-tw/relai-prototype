@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { unstable_readConfig as readConfig } from 'wrangler'
 
 export function verifyStagingBuild(config, staging) {
+  const requiredSecrets = ['AUTH_PEPPER', 'GEMINI_API_KEY']
+  assert.deepEqual(staging.secrets?.required, requiredSecrets, 'Source staging runtime secrets must remain required')
+  assert.deepEqual(config.secrets?.required, requiredSecrets, 'Built staging runtime secrets must remain inherited')
   for (const [label, candidate] of [['Source staging', staging], ['Built staging', config]]) {
     assert.equal(candidate.observability?.enabled, true, `${label} observability must be enabled`)
     assert.equal(candidate.observability?.logs?.enabled, true, `${label} logs must be enabled`)

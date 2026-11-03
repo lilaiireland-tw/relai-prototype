@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../index'
 import { digestSessionToken, generateSessionToken } from '../auth/crypto'
 import { createRepositories } from '../persistence'
+import { saveVocabulary as persistVocabulary } from '../persistence/vocabulary'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import type { VocabularySelection, VocabularySuggestion } from '../services/vocabulary-image'
-import { normalizeSense } from '../services/vocabulary-catalog'
+import { normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
 
 const now = '2027-01-02T10:00:00.000Z'
 const suggestion: VocabularySuggestion = {
@@ -113,6 +114,14 @@ describe('authenticated canonical image vocabulary', () => {
     return id
   }
 
+  async function completeSource(userId: string, sourceId: string, items: VocabularySuggestion[]) {
+    const plans = await prepareVocabulary(db, items, bindings, 'gemini-3.8-flash')
+    const results = await persistVocabulary(db, userId, sourceId, plans, now)
+    const card_ids = results.flatMap(result => 'card_id' in result ? [result.card_id] : [])
+    await db.prepare('UPDATE image_vocabulary_jobs SET results_json = ? WHERE job_id = ? AND user_id = ?')
+      .bind(JSON.stringify({ results, card_ids }), sourceId, userId).run()
+  }
+
   function upload(cookie: string | undefined, file: File, extra = false, key = crypto.randomUUID()) {
     const form = new FormData()
     form.append('image', file)
@@ -186,6 +195,17 @@ describe('authenticated canonical image vocabulary', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({ count: 0 })
   })
 
+  it('rejects legacy saves without persisted job results before any Gemini call', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const gemini = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', gemini)
+    const response = await save(cookie, sourceId, [selection(suggestion)])
+    expect(response.status).toBe(409)
+    expect((await response.json() as { error: { code: string } }).error.code).toBe('IMAGE_JOB_ALREADY_PROCESSED')
+    expect(gemini).not.toHaveBeenCalled()
+  })
+
   it('reuses a complete canonical sense across users without lexical AI calls', async () => {
     const ownerCookie = await session('owner')
     const otherCookie = await session('other')
@@ -194,7 +214,9 @@ describe('authenticated canonical image vocabulary', () => {
     const canonical = addCatalog(suggestion, completeContent, 'curious-canonical')
     const gemini = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', gemini)
+    await completeSource('owner', ownerSource, [suggestion])
     const first = await save(ownerCookie, ownerSource, [selection(suggestion)])
+    await completeSource('other', otherSource, [suggestion])
     const second = await save(otherCookie, otherSource, [selection(suggestion)])
     const firstResult = await first.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
     const secondResult = await second.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
@@ -220,6 +242,7 @@ describe('authenticated canonical image vocabulary', () => {
         english_example: completeContent.english_example,
         zh_tw_example_translation: completeContent.zh_tw_example_translation }] }))
     vi.stubGlobal('fetch', gemini)
+    await completeSource('owner', sourceId, [suggestion])
     const response = await save(cookie, sourceId, [selection(suggestion)])
     expect((await response.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(gemini).toHaveBeenCalledTimes(1)
@@ -241,6 +264,7 @@ describe('authenticated canonical image vocabulary', () => {
     const sourceId = await sourceItem('owner')
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
       modelOutput({ version: 1, items: [{ item_index: 0, ...completeContent }] })))
+    await completeSource('owner', sourceId, [suggestion])
     const response = await save(cookie, sourceId, [selection(suggestion)])
     const result = await response.json() as { results: { status: string; card_id: string }[]; cards: { id: string }[] }
     expect(result.results[0]).toMatchObject({ status: 'saved', card_id: result.cards[0].id })
@@ -272,6 +296,7 @@ describe('authenticated canonical image vocabulary', () => {
         english_example: 'She was curious about the map.', zh_tw_example_translation: '她對那張地圖感到好奇。',
         usage_patterns: usagePatterns }] }))
     vi.stubGlobal('fetch', fetch)
+    await completeSource('owner', sourceId, [suggestion])
     const response = await save(cookie, sourceId, [selection(suggestion)])
     const result = await response.json() as { results: { status: string }[]; cards: { usage_patterns: unknown[] }[] }
     expect(result.results[0].status).toBe('saved')
@@ -306,6 +331,7 @@ describe('authenticated canonical image vocabulary', () => {
       zh_tw_example_translation: `翻譯 ${item_index}` }))
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(modelOutput({ version: 1, items: generated })))
+    await completeSource('owner', sourceId, bankSenses)
     const response = await save(cookie, sourceId, bankSenses.map(selection))
     expect((await response.json() as { results: { status: string }[] }).results.map(row => row.status))
       .toEqual(['saved', 'saved'])
@@ -329,6 +355,7 @@ describe('authenticated canonical image vocabulary', () => {
         : modelOutput({ version: 1, matches: [{ item_index: 0, action: 'new', candidate_index: null, confidence: 0.99 }] })
     })
     vi.stubGlobal('fetch', gemini)
+    await Promise.all([completeSource('owner', ownerSource, [suggestion]), completeSource('other', otherSource, [suggestion])])
     const [first, concurrent] = await Promise.all([
       save(ownerCookie, ownerSource, [selection(suggestion)]), save(otherCookie, otherSource, [selection(suggestion)]),
     ])
@@ -337,7 +364,7 @@ describe('authenticated canonical image vocabulary', () => {
     const ids = sqlite.prepare('SELECT DISTINCT vocabulary_catalog_id FROM flashcards ORDER BY vocabulary_catalog_id').all() as { vocabulary_catalog_id: string }[]
     expect(ids).toHaveLength(1)
     const retry = await save(ownerCookie, ownerSource, [selection(suggestion)])
-    expect((await retry.json() as { results: { status: string }[] }).results[0].status).toBe('already_saved')
+    expect((await retry.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_stats WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
     expect(gemini).toHaveBeenCalledTimes(2)
@@ -355,6 +382,7 @@ describe('authenticated canonical image vocabulary', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(modelOutput({ version: 1, matches: [{ item_index: 0, action: 'ambiguous', candidate_index: null, confidence: 0.55 }] }))
       .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 1, ...completeContent }] })))
+    await completeSource('owner', sourceId, [bank, other])
     const first = await save(ownerCookie, sourceId, [selection(bank), selection(other)])
     const result = await first.json() as { results: { status: string; options?: { catalog_id: string; semantic_sense: string }[] }[]; cards: { id: string }[] }
     expect(result.results.map(item => item.status)).toEqual(['ambiguous', 'saved'])
@@ -382,6 +410,7 @@ describe('authenticated canonical image vocabulary', () => {
       { item_index: 0, ...completeContent },
       { item_index: 1, zh_tw_definition: '地圖', unexpected: 'reject this field' },
     ] })))
+    await completeSource('owner', sourceId, [suggestion, second])
     const response = await save(cookie, sourceId, [selection(suggestion), selection(second)])
     expect(response.status).toBe(200)
     expect((await response.json() as { results: { status: string; reason?: string }[] }).results)

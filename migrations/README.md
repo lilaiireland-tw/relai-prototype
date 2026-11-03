@@ -23,6 +23,17 @@ committed/applied migration; correct it with a new migration. Wrangler records
 applied filenames in `d1_migrations`; keep that history intact. Do not repair
 schema through unrecorded Dashboard SQL.
 
+Apply every new migration against isolated local D1 first. A migration that
+copies or rebuilds an existing table needs a written scan-risk assessment before
+remote review. Remote verification must stay bounded unless a full-table scan is
+separately authorized. Codex never applies remote migrations automatically;
+staging and production operations need separate, narrowly scoped Product Owner
+authorization. Ordinary CI never applies remote migrations. Direct
+`wrangler`/`npx wrangler` commands bypass repository approval wrappers, so routine
+Codex execution must have no Cloudflare/Google/Gemini credentials, cached Wrangler
+authentication, or secret bindings in local Worker processes. Local Worker config
+excludes `.dev.vars` secrets.
+
 See [D1 migration workflow](../docs/d1-migrations.md) for exact local/staging
 commands, production release steps, and safety rules.
 
@@ -46,11 +57,6 @@ release must be coordinated by an operator. See the B5.4 section in
 verification steps. No remote D1 migration is performed by ordinary tests, CI,
 build or deployment.
 
-`0006_durable_image_vocabulary_jobs.sql` adds optional canonical usage-pattern
-JSON to catalog records, versions, and legacy candidates, plus the durable image
-job ledger, indexes, and a trigger that atomically limits each user's accepted
-jobs to five per Europe/Dublin date. It preserves all existing rows and applied
-migrations. The staging Queue and private R2 names are configured separately in
-`wrangler.jsonc`; operators must provision those resources and apply 0006 to
-staging before releasing the new capture route. See
-[image vocabulary jobs](../docs/image-vocabulary-jobs.md).
+## Durable image vocabulary jobs (0006)
+
+Migration `0006_durable_image_vocabulary_jobs.sql` adds optional canonical usage-pattern JSON, the durable image-job ledger and indexes, and an atomic five-per-Dublin-day quota trigger. It preserves existing rows and migrations. The staging Queue and private R2 bindings are configured in `wrangler.jsonc`; operators must provision those resources and apply 0006 to staging before releasing the capture route. See [image vocabulary jobs](../docs/image-vocabulary-jobs.md).

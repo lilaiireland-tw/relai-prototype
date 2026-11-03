@@ -1,7 +1,9 @@
 # Closed-beta account management (Issue #39)
 
-Run from the repository root with Node.js 24 and installed dependencies. Only an
-authorized operator with Cloudflare D1 access should execute these commands.
+Run from the repository root with Node.js 24 and installed dependencies. Every
+command accesses remote D1 and requires Product Owner authorization for that
+operation, plus both safety opt-ins. Set the approval variable only for the
+authorized invocation; do not put it in routine development or CI environments.
 Supply the target Worker's matching `AUTH_PEPPER` through the process environment
 using your protected secret injection workflow. The CLI does not accept a pepper
 argument, read credential files directly, or obtain the pepper from Worker bindings.
@@ -9,11 +11,11 @@ Missing pepper prevents all commands, including listing, before creating a
 temporary config or opening a platform connection.
 
 ```sh
-npm run user:manage -- create --username alex --display-name "Alex"
-npm run user:manage -- create --username alex --display-name "Alex" --cohort-source "Referral notes"
-npm run user:manage -- reset-password --username alex
-npm run user:manage -- disable --username alex
-npm run user:manage -- list
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- create --username alex --display-name "Alex" --approve-remote-cloudflare
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- create --username alex --display-name "Alex" --cohort-source "Referral notes" --approve-remote-cloudflare
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- reset-password --username alex --approve-remote-cloudflare
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- disable --username alex --approve-remote-cloudflare
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- list --approve-remote-cloudflare
 ```
 
 Staging is the default. `--env staging` is also accepted. Production requires both
@@ -56,9 +58,10 @@ Retry disable after a failure. The CLI does not claim atomicity across repositor
 operations or guarantee delivery of stdout after a committed credential write.
 
 List outputs JSON containing only account ID, username, display name, role, active
-status, cohort source and account timestamps (including last login). Disabled
-accounts remain visible. Password salts and digests are excluded by the repository
-SQL projection.
+status, cohort source and account timestamps (including last login), capped at
+1,000 accounts. If the database contains more, the command fails without returning
+a partial list. Disabled accounts remain visible. Password salts and digests are
+excluded by the repository SQL projection.
 
 ## Provisioning a new beta account (Issue #48)
 
@@ -68,7 +71,7 @@ Use a real terminal for interactive creation; piped input/output is refused.
 ### A. Interactive temporary-password creation
 
 ```sh
-npm run user:manage -- create --interactive --env staging
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- create --interactive --env staging --approve-remote-cloudflare
 ```
 
 The CLI asks for username, display name, optional cohort source, temporary
@@ -91,7 +94,7 @@ success; keep it available privately for secure handoff to the student.
 ### B. Existing random-password creation
 
 ```sh
-npm run user:manage -- create --username alex --display-name "Alex"
+RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT npm run user:manage -- create --username alex --display-name "Alex" --approve-remote-cloudflare
 ```
 
 Optional `--cohort-source "Referral notes"` remains available. The CLI generates

@@ -160,6 +160,34 @@ describe('Phase 4 authenticated product UI', () => {
   expect(window.location.pathname).toContain('/cards/')
   expect(container.textContent).toContain('curious')
  })
+ it('recovers the durable job by idempotency key when the upload response is lost', async () => {
+  const originalFetch = vi.mocked(fetch).getMockImplementation()!
+  let idempotencyKey = ''
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+   const path = new URL(String(url), 'https://example.test').pathname
+   if (path.endsWith('/vocabulary/image-jobs') && init?.method === 'POST') {
+    idempotencyKey = new Headers(init.headers).get('Idempotency-Key') ?? ''
+    throw new TypeError('connection lost after upload')
+   }
+   if (path.includes('/vocabulary/image-jobs/by-key/')) return server.response(String(url), init)
+   return originalFetch(url, init)
+  })
+  await renderAt('capture')
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!
+  await act(() => {
+   Object.defineProperty(input, 'files', { configurable: true, value: [new File(['image'], 'lesson.png', { type: 'image/png' })] })
+   input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await submit()
+  expect(idempotencyKey).toMatch(/^[\da-f-]{36}$/i)
+  expect(requests('/vocabulary/image-jobs', 'POST')).toHaveLength(1)
+  expect(requests('/vocabulary/image-jobs/by-key/' + idempotencyKey)).toHaveLength(1)
+  expect(requests('/vocabulary/save', 'POST')).toHaveLength(0)
+  expect(container.textContent).toContain('curious')
+  await refreshAt('capture')
+  expect(requests('/vocabulary/image-jobs', 'POST')).toHaveLength(1)
+  expect(requests('/vocabulary/image-jobs/by-key/' + idempotencyKey)).toHaveLength(2)
+ })
  it('lets the user resolve an ambiguous catalog sense', async () => {
   const sourceId = '00000000-0000-4000-8000-000000000099'
   const cardId = '00000000-0000-4000-8000-000000000098'

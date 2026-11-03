@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { log } from 'node:console'
+import { error as logError, log } from 'node:console'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL, URL } from 'node:url'
+import { logRemoteRisk, requireRemoteApproval } from './cloudflare-approval.mjs'
 
 const { AbortSignal } = globalThis
 
@@ -37,7 +38,15 @@ export async function verifyStagingHealth(value, { fetcher = globalThis.fetch, a
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const urls = await verifyStagingHealth(process.env.STAGING_URL)
-  log(`Staging health passed: ${urls.health}`)
-  log(`Product Owner test URL: ${urls.app}`)
+  try {
+    const args = requireRemoteApproval(process.argv.slice(2))
+    assert.equal(args.length, 0, 'This staging health check accepts only the remote approval flag')
+    logRemoteRisk('staging Worker health check', 'at most 6 GET requests to the health endpoint; the current route does not query D1.')
+    const urls = await verifyStagingHealth(process.env.STAGING_URL)
+    log(`Staging health passed: ${urls.health}`)
+    log(`Product Owner test URL: ${urls.app}`)
+  } catch (error) {
+    logError(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+  }
 }

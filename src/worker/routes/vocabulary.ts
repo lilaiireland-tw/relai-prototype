@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { AuthEnv } from '../auth/types'
 import { requireAuth, requirePasswordChanged } from '../middleware/auth'
 import { createRepositories } from '../persistence'
-import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary } from '../persistence/vocabulary'
+import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary, type VocabularySaveResult } from '../persistence/vocabulary'
 import { vocabularySuggestionSchema } from '../services/vocabulary-image'
 import { normalizeHeadword, normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
 import { acceptImageJob, imageJobStatus, imageQuota, recoverFailedImageJob } from '../services/image-vocabulary-jobs'
@@ -161,21 +161,32 @@ vocabulary.post('/save', async c => {
   if (!source) return c.json({ error: { code: 'SOURCE_NOT_FOUND', message: 'Image extraction was not found.' } }, 404)
   const job = await c.env.DB.prepare(`SELECT status, results_json, provider_state FROM image_vocabulary_jobs WHERE job_id = ? AND user_id = ?`)
     .bind(source.id, userId).first<{ status: string; results_json: string | null; provider_state: string }>()
-  if (!job || job.status !== 'completed' || input.data.items.some(item => !item.resolve_sense)) {
-    if (!job || job.status !== 'completed' || job.provider_state === 'started' || job.provider_state === 'unknown') {
-      return c.json({ error: { code: 'IMAGE_JOB_ALREADY_PROCESSED', message: 'Only completed jobs can resolve a selected sense.' } }, 409)
-    }
+  if (!job || job.status !== 'completed' || job.provider_state === 'started' || job.provider_state === 'unknown' || !job.results_json) {
+    return c.json({ error: { code: 'IMAGE_JOB_ALREADY_PROCESSED', message: 'Only completed jobs with persisted results can be saved.' } }, 409)
   }
-  if (job.results_json && input.data.items.every(item => !item.resolve_sense)) {
-    const stored = JSON.parse(job.results_json) as { results: unknown[]; card_ids: string[] }
-    const cards = await Promise.all(stored.card_ids.map(id => createRepositories(c.env.DB).flashcards.find(userId, id)))
-    return c.json({ results: stored.results, cards: cards.filter(card => card !== null) })
+  let persisted: { results: VocabularySaveResult[]; card_ids: string[] }
+  try { persisted = JSON.parse(job.results_json) as typeof persisted } catch {
+    return c.json({ error: { code: 'IMAGE_JOB_RESULT_UNAVAILABLE', message: 'Persisted image results are unavailable.' } }, 409)
+  }
+  if (input.data.items.every(item => !item.resolve_sense)) {
+    const cards = await Promise.all(persisted.card_ids.map(id => createRepositories(c.env.DB).flashcards.find(userId, id)))
+    return c.json({ results: persisted.results, cards: cards.filter(card => card !== null) })
+  }
+  if (input.data.items.some(item => !item.resolve_sense)) {
+    return c.json({ error: { code: 'INVALID_INPUT', message: 'Resolve one persisted ambiguous sense at a time.' } }, 400)
   }
   let extraction: z.infer<typeof extractionSchema>
   try {
     extraction = extractionSchema.parse(JSON.parse(source.raw_text ?? ''))
   } catch {
     return c.json({ error: { code: 'EXTRACTION_NOT_FOUND', message: 'Recognized words are no longer available.' } }, 409)
+  }
+  for (const item of input.data.items) {
+    const allowed = persisted.results.some(result => result.status === 'ambiguous' &&
+      result.item.headword === item.headword && result.item.part_of_speech === item.part_of_speech &&
+      result.item.source_context === item.source_context &&
+      result.options.some(option => option.semantic_sense === item.semantic_sense))
+    if (!allowed) return c.json({ error: { code: 'INVALID_INPUT', message: 'Select a published sense offered for this image job.' } }, 400)
   }
   const bySelection = new Map(extraction.suggestions.map(item => [JSON.stringify([
     item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
@@ -201,8 +212,16 @@ vocabulary.post('/save', async c => {
   if (items.some(item => !item)) {
     return c.json({ error: { code: 'INVALID_INPUT', message: 'Select words from this image extraction.' } }, 400)
   }
-  const plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
-    c.env, source.ai_model ?? 'unknown')
+  let plans: Awaited<ReturnType<typeof prepareVocabulary>>
+  try {
+    plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
+      c.env, source.ai_model ?? 'unknown', async () => { throw new Error('DURABLE_CHECKPOINT_REQUIRED') })
+  } catch (error) {
+    if (String(error).includes('DURABLE_CHECKPOINT_REQUIRED')) {
+      return c.json({ error: { code: 'IMAGE_JOB_CHECKPOINT_REQUIRED', message: 'This sense needs a durable image-job checkpoint.' } }, 409)
+    }
+    throw error
+  }
   const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
   const flashcards = createRepositories(c.env.DB).flashcards
   const cards = await Promise.all(results.flatMap(result => 'card_id' in result

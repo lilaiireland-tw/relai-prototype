@@ -180,7 +180,11 @@ describe('CEFR-J importer platform selection (no remote connections)', () => {
 
   it('keeps CLI confirmation guards and disallows any environment/config/production switches', () => {
     expect(options(['--file', 'manifest.json'])).toMatchObject({ remote: false })
-    expect(options(['--file', 'manifest.json', '--remote', '--confirm-staging', 'relai-staging-db']))
+    const approval = { RELAI_REMOTE_CLOUDFLARE_APPROVAL: 'I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT' }
+    expect(() => options(['--file', 'manifest.json', '--remote', '--confirm-staging', 'relai-staging-db']))
+      .toThrow(/Blocked remote Cloudflare access/)
+    expect(options(['--file', 'manifest.json', '--remote', '--confirm-staging', 'relai-staging-db',
+      '--approve-remote-cloudflare'], approval))
       .toMatchObject({ remote: true, confirmation: 'relai-staging-db' })
     for (const args of [
       ['--remote'], ['--remote', '--confirm-staging', 'relai-prod-db'],
