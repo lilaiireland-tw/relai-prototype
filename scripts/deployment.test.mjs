@@ -16,14 +16,16 @@ const staging = {
   secrets: { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] },
   observability: { enabled: true, logs: { enabled: true, invocation_logs: true } },
   d1_databases: [{ binding: 'DB', database_name: 'relai-staging-db', database_id: 'staging-id' }],
+  r2_buckets: [{ binding: 'IMAGE_STORAGE', bucket_name: 'relai-vocabulary-images-staging', jurisdiction: 'eu' }],
 }
 const origin = 'https://relai-prototype-staging.example.workers.dev'
 
-test('source Wrangler config enables observability only for staging', () => {
+test('source Wrangler config enables staging observability and the exact EU R2 binding', () => {
   const config = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
   assert.equal(config.observability?.enabled, true)
   assert.equal(config.observability?.logs?.enabled, true)
   assert.equal(config.observability?.logs?.invocation_logs, true)
+  assert.deepEqual(config.r2_buckets, staging.r2_buckets)
   for (const env of ['', 'production']) {
     const other = readConfig({ config: 'wrangler.jsonc', env })
     assert.notEqual(other.observability?.enabled, true)
@@ -62,6 +64,8 @@ test('staging deployment guard rejects a production build, swapped DB, extra bin
     { d1_databases: [{ ...staging.d1_databases[0], database_name: 'relai-prod-db' }] },
     { d1_databases: [{ ...staging.d1_databases[0], database_id: 'production-id' }] },
     { d1_databases: [{ ...staging.d1_databases[0], binding: 'OTHER' }] },
+    { r2_buckets: [{ binding: 'IMAGE_STORAGE', bucket_name: 'relai-vocabulary-images-staging' }] },
+    { r2_buckets: [{ ...staging.r2_buckets[0], bucket_name: 'other-bucket' }] },
     { secrets: { required: [] } },
     { secrets: { required: ['AUTH_PEPPER'] } },
   ]) assert.throws(() => verifyStagingBuild({ ...staging, ...patch }, staging))
@@ -94,13 +98,16 @@ test('staging deploy commands run the environment guard before Wrangler', () => 
   assert.match(readFileSync(new URL('./deploy-staging.mjs', import.meta.url), 'utf8'), /requireRemoteApproval/)
 })
 
-test('staging and production deployment preparation preserves only required secret names and exact D1 targets', () => {
+test('deployment preparation preserves required secret names, exact D1 targets and R2 bindings', () => {
   for (const env of ['staging', 'production']) {
     const source = readConfig({ config: 'wrangler.jsonc', env })
-    const built = { name: source.name, d1_databases: source.d1_databases, secrets: { required: [] } }
+    const built = {
+      name: source.name, d1_databases: source.d1_databases, r2_buckets: source.r2_buckets, secrets: { required: [] },
+    }
     const prepared = prepareDeployConfig(built, source)
     assert.deepEqual(prepared.secrets, { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] })
     assert.deepEqual(prepared.d1_databases, source.d1_databases)
+    assert.deepEqual(prepared.r2_buckets, source.r2_buckets)
     assert.throws(() => prepareDeployConfig({ ...built, name: 'wrong-worker' }, source), /must match/)
     assert.throws(() => prepareDeployConfig({ ...built, d1_databases: [] }, source), /Exactly one built D1/)
   }

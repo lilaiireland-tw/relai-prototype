@@ -7,8 +7,13 @@ import { unstable_readConfig as readConfig } from 'wrangler'
 
 export function verifyStagingBuild(config, staging) {
   const requiredSecrets = ['AUTH_PEPPER', 'GEMINI_API_KEY']
+  const requiredR2Buckets = [{
+    binding: 'IMAGE_STORAGE', bucket_name: 'relai-vocabulary-images-staging', jurisdiction: 'eu',
+  }]
   assert.deepEqual(staging.secrets?.required, requiredSecrets, 'Source staging runtime secrets must remain required')
   assert.deepEqual(config.secrets?.required, requiredSecrets, 'Built staging runtime secrets must remain inherited')
+  assert.deepEqual(staging.r2_buckets, requiredR2Buckets, 'Source staging R2 binding must target the EU image bucket')
+  assert.deepEqual(config.r2_buckets, requiredR2Buckets, 'Built staging R2 binding must target the EU image bucket')
   for (const [label, candidate] of [['Source staging', staging], ['Built staging', config]]) {
     assert.equal(candidate.observability?.enabled, true, `${label} observability must be enabled`)
     assert.equal(candidate.observability?.logs?.enabled, true, `${label} logs must be enabled`)
