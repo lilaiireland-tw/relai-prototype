@@ -1,6 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
+import { prepareVocabulary } from './vocabulary-catalog'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import {
   acceptImageJob, consumeImageJobs, imageJobStatus, imageQuota, imageQuotaWindow, processImageJob, recoverFailedImageJob,
@@ -9,7 +11,7 @@ import {
 
 const now = new Date('2027-01-02T10:00:00.000Z')
 const image = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0])
-const suggestion = { headword: 'curious', part_of_speech: 'adjective', semantic_sense: 'eager to know',
+const suggestion = { headword: 'curious', part_of_speech: 'adjective' as const, semantic_sense: 'eager to know',
   source_context: 'She was curious about the map.', confidence: 0.99 }
 const pattern = { pattern: 'be curious about + noun', zh_tw_explanation: '對……感到好奇',
   example: 'She is curious about the map.', zh_tw_example_translation: '她對那張地圖感到好奇。' }
@@ -85,6 +87,7 @@ function interleaveBeforeRun(env: ImageJobEnv, sqlMatch: string, interleave: () 
   let interleaved = false
   function wrap(statement: PersistenceStatement, sql: string): PersistenceStatement {
     return {
+      ...statement,
       bind(...values) { return wrap(statement.bind(...values), sql) },
       first: () => statement.first(),
       all: () => statement.all(),
@@ -105,6 +108,96 @@ function interleaveBeforeRun(env: ImageJobEnv, sqlMatch: string, interleave: () 
 
 describe('durable image vocabulary jobs', () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it.each([
+    [{ version: 2, items: [] }, 'response_schema'],
+    [{ version: 1, items: [] }, 'missing_item'],
+    [{ version: 1, items: [{ item_index: '0' }] }, 'missing_item'],
+    [{ version: 1, items: [{ item_index: 0, zh_tw_definition: '' }] }, 'item_schema'],
+    [{ version: 1, items: [{ item_index: 0, secret_user_text: 'do not log me' }] }, 'item_schema'],
+    [{ version: 1, items: [{ item_index: 0 }, { item_index: 0 }] }, 'duplicate_index'],
+    [{ version: 1, items: [{ item_index: 0 }] }, 'missing_fields'],
+  ])('rejects malformed generation with content-free diagnostics: %j', async (value, code) => {
+    const { sqlite, env } = environment()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const plans = await prepareVocabulary(env.DB, [suggestion], env, 'test-model', async () => ({ model: 'test-model', value }))
+      expect(plans[0]).toMatchObject({ kind: 'invalid', reason: 'invalid_content', content: {},
+        validation_failure: { stage: 'catalog_generation', item_index: 0, code } })
+      expect(warn.mock.calls).toEqual([[JSON.stringify({ event: 'vocabulary_validation_failed',
+        stage: 'catalog_generation', item_index: 0, code })]])
+    } finally { warn.mockRestore(); sqlite.close() }
+  })
+
+  it.each([{ suggestions: [] }, { suggestions: [{ ...suggestion, confidence: 0.5 }] }])('preserves empty recognition and intentional sense-confirmation completion: %j', async ({ suggestions }) => {
+    const { sqlite, env } = environment()
+    try {
+      const provider = vi.fn(async () => modelOutput({ version: 1, suggestions }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      expect(sqlite.prepare('SELECT status, error_code FROM image_vocabulary_jobs WHERE job_id = ?').get(job.job_id))
+        .toEqual({ status: 'completed', error_code: null })
+      expect(provider).toHaveBeenCalledOnce()
+    } finally { sqlite.close() }
+  })
+
+  it.each([10, 0, 6])('saves %i of ten recognized words and reports the terminal outcome without retrying', async validCount => {
+    const { sqlite, env, objects } = environment()
+    try {
+      const suggestions = ['map', 'apple', 'book', 'chair', 'door', 'lamp', 'river', 'tree', 'window', 'road']
+        .map(headword => ({ ...suggestion, headword, part_of_speech: 'noun' }))
+      const items = suggestions.map((_, item_index) => item_index < validCount
+        ? { item_index, zh_tw_definition: '測試詞義', english_example: 'A natural example.', zh_tw_example_translation: '自然的例句。' }
+        : { item_index })
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 1, suggestions }))
+        .mockResolvedValueOnce(modelOutput({ version: 1, items: [...items].reverse() }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      const status = await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])
+      expect(status).toMatchObject({ status: validCount ? 'completed' : 'failed',
+        stage: validCount ? 'completed' : 'failed', error_code: validCount ? null : 'NO_CARDS_SAVED' })
+      expect(status.cards).toHaveLength(validCount)
+      expect(status.results?.map(result => result.status)).toEqual(suggestions.map((_, index) => index < validCount ? 'saved' : 'not_saved'))
+      const checkpoint = await env.DB.prepare('SELECT plans_json FROM image_vocabulary_jobs WHERE job_id = ?')
+        .bind(job.job_id).first<{ plans_json: string }>()
+      expect(JSON.parse(checkpoint!.plans_json).slice(validCount).map((plan: { validation_failure: unknown }) => plan.validation_failure))
+        .toEqual(suggestions.slice(validCount).map((_, index) => ({ stage: 'catalog_generation', item_index: validCount + index, code: 'missing_fields' })))
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog').get()).toEqual({ count: validCount })
+      expect(objects.size).toBe(0)
+      await processImageJob(env, job.job_id, () => now)
+      expect(provider).toHaveBeenCalledTimes(2)
+      const body = JSON.parse(String(provider.mock.calls[1][1]?.body))
+      expect(body.response_format).toMatchObject({ type: 'text', mime_type: 'application/json' })
+      const contract = z.fromJSONSchema(body.response_format.schema)
+      expect(contract.safeParse({ version: 1, items: suggestions.map((_, item_index) => ({ item_index })) }).success).toBe(false)
+      expect(contract.safeParse({ version: 1, items: suggestions.map((_, item_index) => ({ item_index,
+        zh_tw_definition: '詞義', english_example: 'An example.', zh_tw_example_translation: '例句。' })) }).success).toBe(true)
+    } finally { sqlite.close() }
+  })
+
+  it('resumes the saving checkpoint without provider calls or duplicate cards after a final-status write fails', async () => {
+    const { sqlite, env } = environment()
+    try {
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 1, suggestions: [suggestion] }))
+        .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 0,
+          zh_tw_definition: '好奇的', english_example: 'She is curious.', zh_tw_example_translation: '她很好奇。' }] }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      interleaveBeforeRun(env, 'SET results_json = ?, status = ?', () => { throw new Error('simulated final-status crash') })
+      await expect(processImageJob(env, job.job_id, () => now)).rejects.toThrow('simulated final-status crash')
+      await processImageJob(env, job.job_id, () => new Date(now.getTime() + 5 * 60_000))
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1]))
+        .toMatchObject({ status: 'completed', error_code: null, results: [{ status: 'already_saved' }], cards: [{ front_content: 'curious' }] })
+      expect(provider).toHaveBeenCalledTimes(2)
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 1 })
+    } finally { sqlite.close() }
+  })
 
   it('enforces five concurrent unique daily reservations per Dublin date and isolates users', async () => {
     const { sqlite, env } = environment()

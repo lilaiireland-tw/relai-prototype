@@ -8,6 +8,7 @@ import { saveVocabulary as persistVocabulary } from '../persistence/vocabulary'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import type { VocabularySelection, VocabularySuggestion } from '../services/vocabulary-image'
 import { normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
+import { z } from 'zod'
 
 const now = '2027-01-02T10:00:00.000Z'
 const suggestion: VocabularySuggestion = {
@@ -246,9 +247,14 @@ describe('authenticated canonical image vocabulary', () => {
     const response = await save(cookie, sourceId, [selection(suggestion)])
     expect((await response.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(gemini).toHaveBeenCalledTimes(1)
-    const request = JSON.parse(String(gemini.mock.calls[0][1]?.body)) as { input: string }
+    const request = JSON.parse(String(gemini.mock.calls[0][1]?.body)) as { input: string; response_format: { schema: Record<string, unknown> } }
     expect(request.input).toContain('"missing":["english_example","zh_tw_example_translation"]')
     expect(request.input).toContain('既有且已驗證的定義')
+    const contract = z.fromJSONSchema(request.response_format.schema)
+    const output = { version: 1, items: [{ item_index: 0, english_example: completeContent.english_example,
+      zh_tw_example_translation: completeContent.zh_tw_example_translation }] }
+    expect(contract.safeParse(output).success).toBe(true)
+    expect(contract.safeParse({ version: 1, items: [{ ...output.items[0], zh_tw_definition: 'overwrite' }] }).success).toBe(false)
     expect(sqlite.prepare('SELECT zh_tw_definition, english_example, zh_tw_example_translation, content_version FROM vocabulary_catalog WHERE id = ?')
       .get(canonical)).toEqual({ zh_tw_definition: '既有且已驗證的定義',
         english_example: completeContent.english_example, zh_tw_example_translation: completeContent.zh_tw_example_translation,

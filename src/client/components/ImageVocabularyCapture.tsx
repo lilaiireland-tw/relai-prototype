@@ -38,7 +38,8 @@ export default function ImageVocabularyCapture() {
   setCards((job.cards ?? []) as Flashcard[])
   if (job.status === 'completed') setMessage(job.suggestions?.length ? summary(job.results ?? []) : '沒有辨識到可用的英文單字，請試試更清晰的照片。')
   else if (job.status === 'needs_attention') setMessage(`處理已暫停。請聯絡管理員並提供工作編號 ${job.job_id}。`)
-  else if (job.status === 'failed') setMessage('照片暫時無法處理，請稍後再試。')
+  else if (job.status === 'failed') setMessage(job.error_code === 'NO_CARDS_SAVED'
+   ? `已辨識圖片，但沒有可儲存的單字卡。${summary(job.results ?? [])}` : '照片暫時無法處理，請稍後再試。')
   else if (job.status === 'received' || job.status === 'queued') setMessage('照片已加入處理佇列…')
   else setMessage('正在辨識照片並建立單字卡…')
  }

@@ -40,6 +40,11 @@ export type VocabularyPlan = {
   content_hash: string | null
   catalog?: CatalogRecord
   options?: { catalog_id: string; semantic_sense: string }[]
+  validation_failure?: {
+    stage: 'catalog_generation'
+    item_index: number
+    code: 'unavailable' | 'response_schema' | 'item_schema' | 'duplicate_index' | 'missing_item' | 'unexpected_field' | 'missing_fields'
+  }
 }
 
 export function normalizeHeadword(value: string) {
@@ -86,16 +91,21 @@ const selectionJsonSchema = {
     required: ['item_index', 'action', 'candidate_index', 'confidence'],
   } } }, required: ['version', 'matches'],
 }
-const generatedJsonSchema = {
-  type: 'object', additionalProperties: false, properties: { version: { type: 'integer' }, items: { type: 'array', maxItems: 10, items: {
-    type: 'object', additionalProperties: false, properties: { item_index: { type: 'integer' }, zh_tw_definition: { type: 'string' },
-      english_example: { type: 'string' }, zh_tw_example_translation: { type: 'string' },
-      usage_patterns: { type: 'array', maxItems: 2, items: { type: 'object', additionalProperties: false, properties: {
-        pattern: { type: 'string' }, zh_tw_explanation: { type: 'string' }, example: { type: 'string' },
-        zh_tw_example_translation: { type: 'string' },
-      }, required: ['pattern', 'zh_tw_explanation', 'example', 'zh_tw_example_translation'] } } },
-    required: ['item_index'],
-  } } }, required: ['version', 'items'],
+function generatedJsonSchema(inputs: { item_index: number; missing: LexicalField[]; existing: Partial<LexicalContent> }[]) {
+  const itemSchema = z.toJSONSchema(generatedItemSchema)
+  return {
+    type: 'object', additionalProperties: false,
+    properties: { version: { type: 'integer', enum: [1] }, items: {
+      type: 'array', minItems: inputs.length, maxItems: inputs.length,
+      items: { anyOf: inputs.map(input => ({
+        type: 'object', additionalProperties: false,
+        properties: { ...Object.fromEntries(Object.entries(itemSchema.properties ?? {}).filter(([key]) =>
+          input.missing.includes(key as LexicalField) || key === 'usage_patterns' && !input.existing.usage_patterns?.length)),
+          item_index: { type: 'integer', enum: [input.item_index] } },
+        required: ['item_index', ...input.missing],
+      })) },
+    } }, required: ['version', 'items'],
+  }
 }
 function complete(content: Partial<LexicalContent>): content is LexicalContent {
   return lexicalFields.every(field => typeof content[field] === 'string' && content[field]!.trim().length > 0)
@@ -228,19 +238,26 @@ export async function prepareVocabulary(
   if (!generationInputs.length) return plans as VocabularyPlan[]
   let generated: Awaited<ReturnType<typeof requestVocabularyJson>> = null
   let parsedGenerated: z.infer<typeof generatedResponseSchema> | null = null
-    generated = await request(generationPrompt(generationInputs), generatedJsonSchema, env, 'catalog_generation')
+  generated = await request(generationPrompt(generationInputs), generatedJsonSchema(generationInputs), env, 'catalog_generation')
   if (generated) {
     const result = generatedResponseSchema.safeParse(generated.value)
     if (result.success) parsedGenerated = result.data
   }
   const generatedByIndex = new Map<number, z.infer<typeof generatedItemSchema>>()
   const invalidIndexes = new Set<number>()
+  const itemFailures = new Map<number, 'item_schema' | 'duplicate_index'>()
   for (const value of parsedGenerated?.items ?? []) {
     const output = generatedItemSchema.safeParse(value)
     const itemIndex = typeof value === 'object' && value !== null && 'item_index' in value &&
       typeof value.item_index === 'number' ? value.item_index : null
-    if (!output.success) { if (itemIndex !== null) invalidIndexes.add(itemIndex); continue }
-    if (generatedByIndex.has(output.data.item_index)) invalidIndexes.add(output.data.item_index)
+    if (!output.success) {
+      if (itemIndex !== null) { invalidIndexes.add(itemIndex); itemFailures.set(itemIndex, 'item_schema') }
+      continue
+    }
+    if (generatedByIndex.has(output.data.item_index)) {
+      invalidIndexes.add(output.data.item_index)
+      itemFailures.set(output.data.item_index, 'duplicate_index')
+    }
     generatedByIndex.set(output.data.item_index, output.data)
   }
 
@@ -248,17 +265,23 @@ export async function prepareVocabulary(
     const item = input.item
     const output = invalidIndexes.has(input.item_index) ? undefined : generatedByIndex.get(input.item_index)
     const supplied = output as (Partial<Record<LexicalField, string>> & { usage_patterns?: UsagePattern[] }) | undefined
-    const invalid = !output || Object.keys(output).some(key => key !== 'item_index' &&
-      !(input.missing.includes(key as LexicalField) || key === 'usage_patterns' && !input.existing.usage_patterns?.length)) ||
-      input.missing.some(field => !supplied?.[field]?.trim())
+    const failureCode = !generated ? 'unavailable' : !parsedGenerated ? 'response_schema'
+      : itemFailures.get(input.item_index) ?? (!output ? 'missing_item'
+        : Object.keys(output).some(key => key !== 'item_index' &&
+          !(input.missing.includes(key as LexicalField) || key === 'usage_patterns' && !input.existing.usage_patterns?.length))
+          ? 'unexpected_field' : input.missing.some(field => !supplied?.[field]?.trim()) ? 'missing_fields' : null)
     const content = { ...input.existing, ...supplied,
       usage_patterns: input.existing.usage_patterns?.length ? input.existing.usage_patterns : supplied?.usage_patterns ?? [] } as Partial<LexicalContent>
-    if (invalid || !complete(content)) {
+    if (failureCode || !complete(content)) {
+      const validation_failure: NonNullable<VocabularyPlan['validation_failure']> = {
+        stage: 'catalog_generation', item_index: input.item_index, code: failureCode ?? 'missing_fields',
+      }
+      console.warn(JSON.stringify({ event: 'vocabulary_validation_failed', ...validation_failure }))
       plans[input.item_index] = { kind: 'invalid', item, normalized_key: normalizeHeadword(item.headword),
         part_of_speech_key: item.part_of_speech, sense_key: input.catalog?.sense_key ?? normalizeSense(item.semantic_sense),
         target_catalog_id: input.catalog?.id ?? null, content: {}, reason: generated ? 'invalid_content' : 'enrichment_unavailable',
         model: generated?.model ?? recognitionModel, prompt_version: VOCABULARY_PROMPT_VERSION,
-        provenance: '', content_hash: null, catalog: input.catalog ?? undefined }
+        provenance: '', content_hash: null, catalog: input.catalog ?? undefined, validation_failure }
       continue
     }
     const finalContent = content as LexicalContent
