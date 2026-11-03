@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --import ./scripts/deny-remote-network.mjs ./node_modules/vite/bin/vite.js --mode staging",
     "build": "node --import ./scripts/deny-remote-network.mjs ./node_modules/vite/bin/vite.js build --mode staging",
-    "build:staging:validated": "npm run lint && npm run typecheck && npm test && npm run build && npm run verify:staging-build",
+    "build:staging:validated": "npm run lint && npm run typecheck && npm test && npm run build && node --import ./scripts/deny-remote-network.mjs scripts/prepare-deploy-config.mjs staging && npm run verify:staging-build",
     "build:production": "node --import ./scripts/deny-remote-network.mjs ./node_modules/vite/bin/vite.js build --mode production",
     "preview": "npm run build && node --import ./scripts/deny-remote-network.mjs ./node_modules/vite/bin/vite.js preview",
     "lint": "node --import ./scripts/deny-remote-network.mjs ./node_modules/eslint/bin/eslint.js src scripts/*.mjs scripts/*.ts vite.config.ts vitest.config.ts eslint.config.js e2e/*.ts playwright.config.ts vite.e2e.config.ts",

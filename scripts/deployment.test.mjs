@@ -72,6 +72,12 @@ test('staging and production deployment flows restore secret names after local b
   assert.match(readFileSync(new URL('./deploy-production.mjs', import.meta.url), 'utf8'), /prepare-deploy-config\.mjs', 'production'/)
 })
 
+test('validated staging builds prepare the deployment config before verification', () => {
+  const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.match(scripts['build:staging:validated'],
+    /npm run build && node --import \.\/scripts\/deny-remote-network\.mjs scripts\/prepare-deploy-config\.mjs staging && npm run verify:staging-build/)
+})
+
 test('staging deploy rejects an inherited Cloudflare environment before Wrangler runs', () => {
   verifyStagingDeployEnvironment({})
   for (const value of ['staging', 'production']) {
