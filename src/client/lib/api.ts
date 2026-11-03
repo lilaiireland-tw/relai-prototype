@@ -1,11 +1,12 @@
-import { cardResponse, cardsResponse, reviewResponse, settingsResponse, starterResponse, statsResponse, vocabularyImageResponse, vocabularySaveResponse } from './product-contract'
+import { cardResponse, cardsResponse, imageJobAcceptedResponse, imageJobResponse, imageQuotaResponse, reviewResponse, settingsResponse, starterResponse, statsResponse, vocabularySaveResponse, type ImageJobAccepted } from './product-contract'
 import type { CardFilter, CardPatch, EnglishLevel, ImageVocabularySelection, ReviewInput, Settings } from '../services/types'
 export const API_BASE_PATH = '/relaiapp/api/v1'
 
 // Only the existing Worker contract is exposed. Add paths when APIs exist.
 type ApiPath = '/health' | '/auth/login' | '/auth/me' | '/auth/logout' | '/auth/change-password' |
  '/onboarding/level' | '/settings' | '/stats/summary' | '/reviews' | '/cards' | `/cards?${string}` | `/cards/${string}` |
- '/vocabulary/image' | '/vocabulary/save'
+ '/vocabulary/image-jobs' | '/vocabulary/image-jobs/quota' | `/vocabulary/image-jobs/${string}` |
+ `/vocabulary/image-jobs/by-key/${string}` | '/vocabulary/save'
 export function apiUrl(path: ApiPath): string {
   return `${API_BASE_PATH}${path}`
 }
@@ -41,7 +42,8 @@ export class ApiError extends Error {
 
 export function createApiClient(transport: typeof fetch = (...args) => globalThis.fetch(...args)) {
   const unauthorizedListeners = new Set<() => void>()
-  async function request(path: ApiPath, body?: object | FormData, method = body || path === '/auth/logout' ? 'POST' : 'GET', timeout = 10_000): Promise<Response> {
+  async function request(path: ApiPath, body?: object | FormData, method = body || path === '/auth/logout' ? 'POST' : 'GET', timeout = 10_000,
+    extraHeaders: Record<string, string> = {}): Promise<Response> {
     let response: Response
     try {
       response = await transport(apiUrl(path), {
@@ -49,7 +51,7 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
         mode: 'same-origin',
         // The browser exclusively manages the HttpOnly session cookie.
         credentials: 'same-origin',
-        headers: { Accept: 'application/json', ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}) },
+        headers: { Accept: 'application/json', ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...extraHeaders },
         ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
         cache: 'no-store',
         signal: AbortSignal.timeout(timeout),
@@ -65,8 +67,9 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     }
     return response
   }
-  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: object | FormData, method?: string, timeout?: number): Promise<T> {
-    const response = await request(path, body, method, timeout)
+  async function getJson<T>(path: ApiPath, decode: (value: unknown) => T, body?: object | FormData, method?: string, timeout?: number,
+    extraHeaders: Record<string, string> = {}): Promise<T> {
+    const response = await request(path, body, method, timeout, extraHeaders)
     try {
       const value: unknown = await response.json()
       return decode(value)
@@ -79,10 +82,20 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     selectLevel(english_level: EnglishLevel) {
       return getJson('/onboarding/level', value => starterResponse.parse(value), { english_level })
     },
-    extractImageVocabulary(file: File) {
+    submitImageVocabulary(file: File, idempotencyKey: string): Promise<ImageJobAccepted> {
       const form = new FormData()
       form.append('image', file)
-      return getJson('/vocabulary/image', value => vocabularyImageResponse.parse(value), form, 'POST', 60_000)
+      return getJson('/vocabulary/image-jobs', value => imageJobAcceptedResponse.parse(value), form, 'POST', 15_000,
+        { 'Idempotency-Key': idempotencyKey })
+    },
+    getImageQuota() {
+      return getJson('/vocabulary/image-jobs/quota', value => imageQuotaResponse.parse(value))
+    },
+    getImageJob(id: string) {
+      return getJson(`/vocabulary/image-jobs/${encodeURIComponent(id)}`, value => imageJobResponse.parse(value))
+    },
+    findImageJobByKey(key: string) {
+      return getJson(`/vocabulary/image-jobs/by-key/${encodeURIComponent(key)}`, value => imageJobResponse.parse(value))
     },
     saveVocabulary(source_item_id: string, items: ImageVocabularySelection[]) {
       return getJson('/vocabulary/save', value => vocabularySaveResponse.parse(value), { source_item_id, items }, 'POST', 120_000)

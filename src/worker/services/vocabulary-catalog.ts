@@ -1,11 +1,12 @@
 import { z } from 'zod'
 import type { PersistenceDatabase } from '../persistence/d1'
-import { requestVocabularyJson, VOCABULARY_PROMPT_VERSION, type VocabularySuggestion } from './vocabulary-image'
+import { requestVocabularyJson, VOCABULARY_PROMPT_VERSION, type VocabularyJsonRequester, type VocabularySuggestion } from './vocabulary-image'
+import { parseUsagePatterns, usagePatternSchema, type UsagePattern } from '../../shared/usage-pattern'
 
 const MATCH_CONFIDENCE = 0.9
 export const lexicalFields = ['zh_tw_definition', 'english_example', 'zh_tw_example_translation'] as const
 export type LexicalField = typeof lexicalFields[number]
-export type LexicalContent = Record<LexicalField, string>
+export type LexicalContent = Record<LexicalField, string> & { usage_patterns?: UsagePattern[] }
 
 export interface CatalogRecord {
   id: string
@@ -21,6 +22,7 @@ export interface CatalogRecord {
   zh_tw_definition: string | null
   english_example: string | null
   zh_tw_example_translation: string | null
+  usage_patterns: UsagePattern[]
 }
 
 export type VocabularyPlan = {
@@ -50,7 +52,7 @@ export function normalizeSense(value: string) {
 }
 
 export async function vocabularyContentHash(content: Partial<LexicalContent>) {
-  const value = JSON.stringify(lexicalFields.map(field => content[field] ?? null))
+  const value = JSON.stringify([...lexicalFields.map(field => content[field] ?? null), content.usage_patterns ?? []])
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
@@ -70,6 +72,7 @@ const generatedItemSchema = z.strictObject({
     zh_tw_definition: z.string().trim().min(1).max(500).optional(),
     english_example: z.string().trim().min(1).max(1000).optional(),
     zh_tw_example_translation: z.string().trim().min(1).max(1000).optional(),
+    usage_patterns: z.array(usagePatternSchema).max(2).optional(),
 })
 const generatedResponseSchema = z.strictObject({
   version: z.literal(1),
@@ -86,7 +89,11 @@ const selectionJsonSchema = {
 const generatedJsonSchema = {
   type: 'object', additionalProperties: false, properties: { version: { type: 'integer' }, items: { type: 'array', maxItems: 10, items: {
     type: 'object', additionalProperties: false, properties: { item_index: { type: 'integer' }, zh_tw_definition: { type: 'string' },
-      english_example: { type: 'string' }, zh_tw_example_translation: { type: 'string' } },
+      english_example: { type: 'string' }, zh_tw_example_translation: { type: 'string' },
+      usage_patterns: { type: 'array', maxItems: 2, items: { type: 'object', additionalProperties: false, properties: {
+        pattern: { type: 'string' }, zh_tw_explanation: { type: 'string' }, example: { type: 'string' },
+        zh_tw_example_translation: { type: 'string' },
+      }, required: ['pattern', 'zh_tw_explanation', 'example', 'zh_tw_example_translation'] } } },
     required: ['item_index'],
   } } }, required: ['version', 'items'],
 }
@@ -106,12 +113,12 @@ function provenance(item: VocabularySuggestion, model: string) {
 async function readCatalog(db: PersistenceDatabase, item: VocabularySuggestion): Promise<CatalogRecord[]> {
   const result = await db.prepare(`SELECT id, normalized_key, part_of_speech, part_of_speech_key, sense_key,
       semantic_sense, cefr_level, source_dataset, provenance, content_version, zh_tw_definition, english_example,
-      zh_tw_example_translation FROM vocabulary_catalog
+      zh_tw_example_translation, usage_patterns FROM vocabulary_catalog
     WHERE normalized_key = ? AND part_of_speech_key = ? AND publication_status = 'published'
     ORDER BY id LIMIT 50`)
-    .bind(normalizeHeadword(item.headword), item.part_of_speech).all<CatalogRecord>()
+    .bind(normalizeHeadword(item.headword), item.part_of_speech).all<Omit<CatalogRecord, 'usage_patterns'> & { usage_patterns: string | null }>()
   if (!result.success) throw new Error('Could not inspect vocabulary catalog.')
-  return result.results
+  return result.results.map(row => ({ ...row, usage_patterns: parseUsagePatterns(row.usage_patterns) }))
 }
 
 function semanticMatchPrompt(items: { itemIndex: number; item: VocabularySuggestion; candidates: CatalogRecord[] }[]) {
@@ -125,14 +132,15 @@ function semanticMatchPrompt(items: { itemIndex: number; item: VocabularySuggest
   return `For each recognized word, compare its source meaning with the supplied published senses. Choose match only when the source context clearly expresses that same sense. Choose new only when it is clearly a different sense. Choose ambiguous when evidence is insufficient or candidates conflict. Do not create IDs or keys. Return contract version 1 and exactly one decision per item. Confidence must reflect semantic evidence, not spelling alone.\n${JSON.stringify(input)}`
 }
 
-function generationPrompt(items: { item_index: number; item: VocabularySuggestion; missing: LexicalField[];
+export function generationPrompt(items: { item_index: number; item: VocabularySuggestion; missing: LexicalField[];
   existing: Partial<LexicalContent> }[]) {
-  return `Generate only the listed missing lexical fields for each English vocabulary sense. Use Traditional Chinese (Taiwan). Write a new, generic example that demonstrates the supplied sense and a faithful translation; do not quote or reproduce the user's source context. Never change or return fields that are not missing. Return contract version 1 with exactly one item per input item.\n${JSON.stringify(items)}`
+  return `Generate only missing lexical fields for each English sense. For zh_tw_definition, give 1–3 concise, idiomatic Taiwan Traditional Chinese dictionary equivalents, ordered by relevance and separated by 「；」; prefer established equivalents over translating the full English description. Choose the sense from headword, part_of_speech, semantic_sense, and source_context, and keep each meaning grammatically consistent with the part of speech. Example: political (adjective) → 政治的；政治上的. Generate a natural English example that demonstrates the sense and a faithful, fluent Taiwan Traditional Chinese translation; never quote the source context. Optionally provide 0–2 common, useful, sense-appropriate usage_patterns; return [] when none is useful, including ordinary nouns without a notable pattern. Keep these distinctions correct: used to + base verb means a past habit ("She used to walk to work."); be used to + noun or V-ing means accustomed to ("She is used to walking to work."); use something to + base verb means use it for an action ("She used a map to find the station."). Never label "use to + verb" as accustomed to. Do not change existing non-empty canonical content. Return contract version 1 with exactly one item per input item.\n${JSON.stringify(items)}`
 }
 
 export async function prepareVocabulary(
   db: PersistenceDatabase, items: VocabularySuggestion[],
   env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string }, recognitionModel: string,
+  request: VocabularyJsonRequester = requestVocabularyJson,
 ): Promise<VocabularyPlan[]> {
   const rows = await Promise.all(items.map(item => readCatalog(db, item)))
   const selected = new Map<number, CatalogRecord>()
@@ -159,7 +167,7 @@ export async function prepareVocabulary(
   if (needsMatch.length) {
     let response: Awaited<ReturnType<typeof requestVocabularyJson>> = null
     let parsed: z.infer<typeof matchResponseSchema> | null = null
-    response = await requestVocabularyJson(semanticMatchPrompt(needsMatch), selectionJsonSchema, env)
+    response = await request(semanticMatchPrompt(needsMatch), selectionJsonSchema, env, 'catalog_match')
     if (response) {
       const result = matchResponseSchema.safeParse(response.value)
       if (result.success) parsed = result.data
@@ -203,6 +211,7 @@ export async function prepareVocabulary(
       zh_tw_definition: catalog.zh_tw_definition ?? undefined,
       english_example: catalog.english_example ?? undefined,
       zh_tw_example_translation: catalog.zh_tw_example_translation ?? undefined,
+      usage_patterns: catalog.usage_patterns,
     } : {}
     const missingFields = missing(existing)
     if (catalog && missingFields.length === 0) {
@@ -219,7 +228,7 @@ export async function prepareVocabulary(
   if (!generationInputs.length) return plans as VocabularyPlan[]
   let generated: Awaited<ReturnType<typeof requestVocabularyJson>> = null
   let parsedGenerated: z.infer<typeof generatedResponseSchema> | null = null
-  generated = await requestVocabularyJson(generationPrompt(generationInputs), generatedJsonSchema, env)
+    generated = await request(generationPrompt(generationInputs), generatedJsonSchema, env, 'catalog_generation')
   if (generated) {
     const result = generatedResponseSchema.safeParse(generated.value)
     if (result.success) parsedGenerated = result.data
@@ -238,10 +247,12 @@ export async function prepareVocabulary(
   for (const input of generationInputs) {
     const item = input.item
     const output = invalidIndexes.has(input.item_index) ? undefined : generatedByIndex.get(input.item_index)
-    const supplied = output as Partial<Record<LexicalField, string>> | undefined
-    const invalid = !output || Object.keys(output).some(key => key !== 'item_index' && !input.missing.includes(key as LexicalField)) ||
+    const supplied = output as (Partial<Record<LexicalField, string>> & { usage_patterns?: UsagePattern[] }) | undefined
+    const invalid = !output || Object.keys(output).some(key => key !== 'item_index' &&
+      !(input.missing.includes(key as LexicalField) || key === 'usage_patterns' && !input.existing.usage_patterns?.length)) ||
       input.missing.some(field => !supplied?.[field]?.trim())
-    const content = { ...input.existing, ...supplied } as Partial<LexicalContent>
+    const content = { ...input.existing, ...supplied,
+      usage_patterns: input.existing.usage_patterns?.length ? input.existing.usage_patterns : supplied?.usage_patterns ?? [] } as Partial<LexicalContent>
     if (invalid || !complete(content)) {
       plans[input.item_index] = { kind: 'invalid', item, normalized_key: normalizeHeadword(item.headword),
         part_of_speech_key: item.part_of_speech, sense_key: input.catalog?.sense_key ?? normalizeSense(item.semantic_sense),

@@ -56,3 +56,7 @@ release must be coordinated by an operator. See the B5.4 section in
 [the migration workflow](../docs/d1-migrations.md) for backup, rehearsal and
 verification steps. No remote D1 migration is performed by ordinary tests, CI,
 build or deployment.
+
+## Durable image vocabulary jobs (0006)
+
+Migration `0006_durable_image_vocabulary_jobs.sql` adds optional canonical usage-pattern JSON, the durable image-job ledger and indexes, and an atomic five-per-Dublin-day quota trigger. It preserves existing rows and migrations. The staging Queue and private R2 bindings are configured in `wrangler.jsonc`; operators must provision those resources and apply 0006 to staging before releasing the capture route. See [image vocabulary jobs](../docs/image-vocabulary-jobs.md).

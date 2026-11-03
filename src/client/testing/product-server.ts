@@ -5,40 +5,50 @@ import type { CardPatch, EnglishLevel, Flashcard, ReviewInput, Settings } from '
 export function productServer() {
  const home = structuredClone(fixtureHome)
  const events = new Set<string>()
+ const jobId = '00000000-0000-4000-8000-000000000001'
+ const suggestions = [
+  { headword: 'curious', part_of_speech: 'adjective', semantic_sense: 'eager to know',
+   source_context: 'She was curious about the old map.', confidence: 0.99 },
+  { headword: 'map', part_of_speech: 'noun', semantic_sense: 'a representation of an area',
+   source_context: 'The map showed the river.', confidence: 0.99 },
+ ]
+ let completedJob: { job_id: string; status: string; stage: string; error_code: string | null;
+  suggestions: typeof suggestions; results: { headword: string; status: 'saved'; card_id: string }[]; cards: Flashcard[] } | undefined
+ function saveCards(sourceId: string, selected: { headword: string; part_of_speech: string }[]) {
+  const cards: Flashcard[] = []
+  const results: { headword: string; status: 'saved'; card_id: string }[] = []
+  for (const [index, item] of selected.entries()) {
+   const content = item.headword === 'curious'
+    ? { zh_tw_definition: '好奇的', english_example: 'She was curious about the old map.', zh_tw_example_translation: '她對那張舊地圖感到好奇。' }
+    : { zh_tw_definition: '地圖', english_example: 'The map showed the river.', zh_tw_example_translation: '地圖標示了那條河。' }
+   const card: Flashcard = {
+    id: `00000000-0000-4000-8000-${String(home.cards.length + index + 1).padStart(12, '0')}`, user_id: 'owner', source_item_id: sourceId,
+    card_type: 'vocabulary', front_content: item.headword,
+    back_content: `${content.zh_tw_definition}\n${content.english_example}\n${content.zh_tw_example_translation}`,
+    part_of_speech: item.part_of_speech, ...content, usage_patterns: [],
+    explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
+    last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+   }
+   cards.push(card); home.cards.unshift(card)
+   results.push({ headword: item.headword, status: 'saved', card_id: card.id })
+  }
+  return { results, cards }
+ }
  function response(url: string, init?: RequestInit): Response {
   const path = new URL(url, 'https://example.test')
   const body = init?.body && !(init.body instanceof FormData) ? JSON.parse(String(init.body)) : {}
-  if (path.pathname.endsWith('/vocabulary/image')) return Response.json({
-   contract_version: 1,
-   source_item_id: '00000000-0000-4000-8000-000000000001',
-   suggestions: [
-    { headword: 'curious', part_of_speech: 'adjective', semantic_sense: 'eager to know',
-     source_context: 'She was curious about the old map.', confidence: 0.99 },
-    { headword: 'map', part_of_speech: 'noun', semantic_sense: 'a representation of an area',
-     source_context: 'The map showed the river.', confidence: 0.99 },
-   ],
-  })
+  if (path.pathname.endsWith('/vocabulary/image-jobs/quota')) return Response.json({ limit: 5, used: 0, remaining: 5, resets_at: '2027-01-03T00:00:00.000Z' })
+  if (path.pathname.endsWith('/vocabulary/image-jobs') && init?.method === 'POST') return Response.json({
+   job_id: jobId, status: 'queued', quota: { limit: 5, used: 1, remaining: 4, resets_at: '2027-01-03T00:00:00.000Z' },
+  }, { status: 202 })
+  if (path.pathname.endsWith(`/vocabulary/image-jobs/${jobId}`) || path.pathname.includes('/vocabulary/image-jobs/by-key/')) {
+   completedJob ??= { job_id: jobId, status: 'completed', stage: 'completed', error_code: null,
+    suggestions, ...saveCards(jobId, suggestions) }
+   return Response.json(completedJob)
+  }
   if (path.pathname.endsWith('/vocabulary/save')) {
    const selected = body.items as { headword: string; part_of_speech: string }[]
-   const cards: Flashcard[] = []
-   const results: { headword: string; status: 'saved'; card_id: string }[] = []
-   for (const [index, item] of selected.entries()) {
-    const content = item.headword === 'curious'
-     ? { zh_tw_definition: '好奇的', english_example: 'She was curious about the old map.', zh_tw_example_translation: '她對那張舊地圖感到好奇。' }
-     : { zh_tw_definition: '地圖', english_example: 'The map showed the river.', zh_tw_example_translation: '地圖標示了那條河。' }
-    const card: Flashcard = {
-    id: `00000000-0000-4000-8000-${String(home.cards.length + index + 1).padStart(12, '0')}`, user_id: 'owner', source_item_id: body.source_item_id,
-    card_type: 'vocabulary', front_content: item.headword,
-    back_content: `${content.zh_tw_definition}\n${content.english_example}\n${content.zh_tw_example_translation}`,
-    part_of_speech: item.part_of_speech, ...content,
-    explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
-    last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }
-    cards.push(card)
-    home.cards.unshift(card)
-    results.push({ headword: item.headword, status: 'saved', card_id: card.id })
-   }
-   return Response.json({ results, cards })
+   return Response.json(saveCards(body.source_item_id, selected))
   }
   if (path.pathname.endsWith('/settings')) {
    if (init?.method === 'PATCH') Object.assign(home.settings, body as Settings)

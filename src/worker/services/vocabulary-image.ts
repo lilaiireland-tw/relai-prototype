@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
-export const VOCABULARY_PROMPT_VERSION = 'b5.4-v1'
+export const VOCABULARY_PROMPT_VERSION = 'b5.5-v1'
 const imageModel = /^gemini-(?:(?:2\.5|[3-9](?:\.\d+)?)-(?:flash(?:-lite)?|pro|argon)(?:-(?:preview(?:-\d{2}-\d{4})?|latest))?|(flash|flash-lite|pro)-latest)$/
 const partsOfSpeech = ['noun', 'verb', 'adjective', 'adverb', 'preposition', 'pronoun', 'conjunction', 'determiner', 'interjection', 'phrase'] as const
 
@@ -16,6 +16,9 @@ const suggestionsSchema = z.strictObject({ version: z.literal(1), suggestions: z
 export type VocabularySuggestion = z.infer<typeof vocabularySuggestionSchema>
 export type VocabularySelection = Pick<VocabularySuggestion,
   'headword' | 'part_of_speech' | 'semantic_sense' | 'source_context'> & { resolve_sense?: boolean }
+export type VocabularyJsonRequester = (
+  input: unknown, schema: Record<string, unknown>, env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string }, stage?: string,
+) => Promise<{ model: string; value: unknown } | null>
 
 export function isImageCapableGeminiModel(value: string) { return imageModel.test(value) }
 
@@ -76,11 +79,12 @@ const recognitionJsonSchema = {
 
 export async function extractVocabularyFromImage(
   bytes: Uint8Array, mimeType: string, env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string },
+  request: VocabularyJsonRequester = requestVocabularyJson,
 ) {
-  const response = await requestVocabularyJson([
+  const response = await request([
     { type: 'text', text: 'Identify up to 10 useful English headwords visibly present in this English-learning image. Return the base headword, one canonical part of speech, a concise English semantic sense, a short exact relevant source context from the image, and confidence from 0 to 1. Do not invent words. Do not generate definitions, examples, translations, IDs, keys, or approval states. Use JSON contract version 1.' },
     { type: 'image', data: base64(bytes), mime_type: mimeType },
-  ], recognitionJsonSchema, env)
+  ], recognitionJsonSchema, env, 'recognition')
   if (!response) return null
   const parsed = suggestionsSchema.safeParse(response.value)
   if (!parsed.success) return null

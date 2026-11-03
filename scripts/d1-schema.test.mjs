@@ -32,6 +32,8 @@ test('core schema and password-change state match approved migrations on clean l
   assert.match(applied, /0003_add_cefr_j_vocabulary_foundation.sql/)
   assert.match(applied, /0004_normalize_vocabulary_ownership.sql/)
   assert.match(applied, /0005_canonical_sense_aware_vocabulary.sql/)
+  assert.match(applied, /0006_durable_image_vocabulary_jobs.sql/)
+  assert.match(applied, /0007_image_storage_cleanup_cursor.sql/)
 
   const metadata = new Map()
   const { schema: initialSchema, history } = verifyCoreSchema((sql) => {
@@ -129,7 +131,7 @@ test('canonical catalog senses are shared while user-owned learning state stays 
   db.close()
 })
 
-test('0005 preserves existing users, catalog, cards, reviews, settings and source data', () => {
+test('0005 and 0006 preserve existing users, catalog, cards, reviews, settings and source data', () => {
   const db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys = ON')
   const migrations = readdirSync('migrations').filter(name => name.endsWith('.sql')).sort()
@@ -187,6 +189,22 @@ test('0005 preserves existing users, catalog, cards, reviews, settings and sourc
     { id: 'error-card', front_content: 'wrong', back_content: 'right' })
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM user_vocabulary_items WHERE id = ?').get('personal').count, 1)
   assert.equal(db.prepare('PRAGMA table_info(flashcards)').all().some(column => column.name === 'vocabulary_key'), false)
+  const preserved = {
+    user: { ...db.prepare("SELECT id, display_name FROM users WHERE id = 'owner'").get() },
+    settings: { ...db.prepare("SELECT user_id, timezone, english_level FROM user_settings WHERE user_id = 'owner'").get() },
+    source: { ...db.prepare("SELECT id, raw_text FROM source_items WHERE id = 'source'").get() },
+    cards: db.prepare("SELECT id, user_id, is_favorite FROM flashcards WHERE user_id = 'owner' ORDER BY id").all().map(row => ({ ...row })),
+    reviews: db.prepare("SELECT id, client_event_id, card_id FROM review_events WHERE user_id = 'owner' ORDER BY id").all().map(row => ({ ...row })),
+  }
+  db.exec(readFileSync(join('migrations', '0006_durable_image_vocabulary_jobs.sql'), 'utf8'))
+  assert.deepEqual({
+    user: { ...db.prepare("SELECT id, display_name FROM users WHERE id = 'owner'").get() },
+    settings: { ...db.prepare("SELECT user_id, timezone, english_level FROM user_settings WHERE user_id = 'owner'").get() },
+    source: { ...db.prepare("SELECT id, raw_text FROM source_items WHERE id = 'source'").get() },
+    cards: db.prepare("SELECT id, user_id, is_favorite FROM flashcards WHERE user_id = 'owner' ORDER BY id").all().map(row => ({ ...row })),
+    reviews: db.prepare("SELECT id, client_event_id, card_id FROM review_events WHERE user_id = 'owner' ORDER BY id").all().map(row => ({ ...row })),
+  }, preserved)
+  assert.equal(db.prepare("SELECT usage_patterns FROM vocabulary_catalog WHERE id = 'source-cat'").get().usage_patterns, '[]')
   db.close()
 })
 

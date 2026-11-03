@@ -65,6 +65,7 @@ export interface FlashcardRow {
   zh_tw_definition: string | null
   english_example: string | null
   zh_tw_example_translation: string | null
+  usage_patterns: { pattern: string; zh_tw_explanation: string; example: string; zh_tw_example_translation: string }[]
   explanation: string | null
   irish_usage: string | null
   source: string | null

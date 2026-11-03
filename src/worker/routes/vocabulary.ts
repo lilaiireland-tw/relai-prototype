@@ -3,9 +3,10 @@ import { z } from 'zod'
 import type { AuthEnv } from '../auth/types'
 import { requireAuth, requirePasswordChanged } from '../middleware/auth'
 import { createRepositories } from '../persistence'
-import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary } from '../persistence/vocabulary'
-import { extractVocabularyFromImage, isImageCapableGeminiModel, vocabularySuggestionSchema } from '../services/vocabulary-image'
+import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary, type VocabularySaveResult } from '../persistence/vocabulary'
+import { vocabularySuggestionSchema } from '../services/vocabulary-image'
 import { normalizeHeadword, normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
+import { acceptImageJob, imageJobStatus, imageQuota, recoverFailedImageJob } from '../services/image-vocabulary-jobs'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_MULTIPART_BYTES = MAX_IMAGE_BYTES + 64 * 1024
@@ -33,7 +34,7 @@ const candidateReviewInput = z.discriminatedUnion('action', [
 ])
 
 async function readImage(request: Request): Promise<
-  { file: File; bytes: Uint8Array; mimeType: string } | { status: 400 | 413 | 415 }
+  { bytes: Uint8Array; mimeType: string } | { status: 400 | 413 | 415 }
 > {
   const declaredLength = Number(request.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > MAX_MULTIPART_BYTES) return { status: 413 }
@@ -80,37 +81,73 @@ async function readImage(request: Request): Promise<
       new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4, true) + 8 === bytes.length &&
       new TextDecoder().decode(bytes.subarray(8, 12)) === 'WEBP'
   if (!valid) return { status: 415 }
-  return { file, bytes, mimeType }
+  return { bytes, mimeType }
 }
 
 export const vocabulary = new Hono<AuthEnv>()
 vocabulary.use('*', requireAuth, requirePasswordChanged)
 vocabulary.use('*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
 
-vocabulary.post('/image', async c => {
+vocabulary.get('/image-jobs/quota', async c => c.json(await imageQuota(c.env.DB, c.get('user').id)))
+
+vocabulary.post('/image-jobs', async c => {
   const image = await readImage(c.req.raw)
   if ('status' in image) {
     const message = image.status === 413 ? 'Image is too large.' : image.status === 415 ? 'Upload a valid JPG, PNG, or WebP image.' : 'Upload one image file.'
     return c.json({ error: { code: image.status === 413 ? 'IMAGE_TOO_LARGE' : 'INVALID_IMAGE', message } }, image.status)
   }
-  const model = c.env.GEMINI_MODEL ?? 'gemini-3.8-flash'
-  if (!c.env.GEMINI_API_KEY || !isImageCapableGeminiModel(model)) {
-    return c.json({ error: { code: 'GEMINI_UNAVAILABLE', message: 'Image vocabulary extraction is unavailable.' } }, 503)
+  const key = z.string().uuid().safeParse(c.req.header('Idempotency-Key'))
+  if (!key.success) return c.json({ error: { code: 'INVALID_IDEMPOTENCY_KEY', message: 'Provide a valid image request key.' } }, 400)
+  const now = new Date()
+  try {
+    const accepted = await acceptImageJob(c.env, c.get('user').id, key.data, image.bytes, image.mimeType, now)
+    return c.json({ job_id: accepted.job.job_id, status: accepted.job.status, quota: accepted.quota }, 202)
+  } catch (error) {
+    if (String(error).includes('IDEMPOTENCY_CONFLICT')) {
+      return c.json({ error: { code: 'IDEMPOTENCY_CONFLICT', message: 'This request key was already used for another image.' } }, 409)
+    }
+    if (String(error).includes('DAILY_IMAGE_LIMIT_REACHED')) {
+      const quota = await imageQuota(c.env.DB, c.get('user').id, now)
+      c.header('Retry-After', String(Math.max(1, Math.ceil((Date.parse(quota.resets_at) - now.getTime()) / 1000))))
+      return c.json({ error: { code: 'DAILY_IMAGE_LIMIT_REACHED', ...quota } }, 429)
+    }
+    if (String(error).includes('IMAGE_JOBS_UNAVAILABLE')) {
+      return c.json({ error: { code: 'IMAGE_JOBS_UNAVAILABLE', message: 'Image capture is temporarily unavailable.' } }, 503)
+    }
+    if (String(error).includes('GEMINI_UNAVAILABLE')) {
+      return c.json({ error: { code: 'GEMINI_UNAVAILABLE', message: 'Image vocabulary extraction is unavailable.' } }, 503)
+    }
+    throw error
   }
-  const extracted = await extractVocabularyFromImage(image.bytes, image.mimeType, c.env)
-  if (!extracted) {
-    return c.json({ error: { code: 'EXTRACTION_FAILED', message: 'Image vocabulary could not be extracted.' } }, 502)
-  }
-  const sourceItemId = crypto.randomUUID()
-  const at = new Date().toISOString()
-  const inserted = await c.env.DB.prepare(`INSERT INTO source_items
-    (id, user_id, source_type, raw_text, processing_status, ai_model, created_at, updated_at)
-    VALUES (?, ?, 'image', ?, 'processed', ?, ?, ?)`)
-    .bind(sourceItemId, c.get('user').id, JSON.stringify({ version: 1, suggestions: extracted.suggestions }),
-      extracted.model, at, at).run()
-  if (!inserted.success) throw new Error('Could not record image extraction metadata.')
-  return c.json({ contract_version: 1, source_item_id: sourceItemId, suggestions: extracted.suggestions })
 })
+
+vocabulary.get('/image-jobs/by-key/:key', async c => {
+  const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
+    FROM image_vocabulary_jobs WHERE user_id = ? AND idempotency_key = ?`)
+    .bind(c.get('user').id, c.req.param('key')).first<Parameters<typeof imageJobStatus>[1]>()
+  if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'Image job was not found.' } }, 404)
+  return c.json(await imageJobStatus(c.env.DB, job))
+})
+
+vocabulary.get('/image-jobs/:id', async c => {
+  const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
+    FROM image_vocabulary_jobs WHERE user_id = ? AND job_id = ?`)
+    .bind(c.get('user').id, c.req.param('id')).first<Parameters<typeof imageJobStatus>[1]>()
+  if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'Image job was not found.' } }, 404)
+  return c.json(await imageJobStatus(c.env.DB, job))
+})
+
+vocabulary.post('/image-jobs/:id/recover', async c => {
+  if (c.get('user').role !== 'admin') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Administrator access required.' } }, 403)
+  }
+  const recovered = await recoverFailedImageJob(c.env, c.req.param('id'))
+  return recovered
+    ? c.json({ status: 'queued' }, 202)
+    : c.json({ error: { code: 'IMAGE_JOB_NOT_RECOVERABLE', message: 'This job is not safe to retry automatically.' } }, 409)
+})
+
+vocabulary.post('/image', c => c.json({ error: { code: 'ASYNC_IMAGE_JOBS_REQUIRED', message: 'Submit images through /vocabulary/image-jobs.' } }, 410))
 
 vocabulary.post('/save', async c => {
   let body: unknown
@@ -122,11 +159,34 @@ vocabulary.post('/save', async c => {
     WHERE id = ? AND user_id = ? AND source_type = 'image' AND processing_status = 'processed'`)
     .bind(input.data.source_item_id, userId).first<{ id: string; raw_text: string | null; ai_model: string | null }>()
   if (!source) return c.json({ error: { code: 'SOURCE_NOT_FOUND', message: 'Image extraction was not found.' } }, 404)
+  const job = await c.env.DB.prepare(`SELECT status, results_json, provider_state FROM image_vocabulary_jobs WHERE job_id = ? AND user_id = ?`)
+    .bind(source.id, userId).first<{ status: string; results_json: string | null; provider_state: string }>()
+  if (!job || job.status !== 'completed' || job.provider_state === 'started' || job.provider_state === 'unknown' || !job.results_json) {
+    return c.json({ error: { code: 'IMAGE_JOB_ALREADY_PROCESSED', message: 'Only completed jobs with persisted results can be saved.' } }, 409)
+  }
+  let persisted: { results: VocabularySaveResult[]; card_ids: string[] }
+  try { persisted = JSON.parse(job.results_json) as typeof persisted } catch {
+    return c.json({ error: { code: 'IMAGE_JOB_RESULT_UNAVAILABLE', message: 'Persisted image results are unavailable.' } }, 409)
+  }
+  if (input.data.items.every(item => !item.resolve_sense)) {
+    const cards = await Promise.all(persisted.card_ids.map(id => createRepositories(c.env.DB).flashcards.find(userId, id)))
+    return c.json({ results: persisted.results, cards: cards.filter(card => card !== null) })
+  }
+  if (input.data.items.some(item => !item.resolve_sense)) {
+    return c.json({ error: { code: 'INVALID_INPUT', message: 'Resolve one persisted ambiguous sense at a time.' } }, 400)
+  }
   let extraction: z.infer<typeof extractionSchema>
   try {
     extraction = extractionSchema.parse(JSON.parse(source.raw_text ?? ''))
   } catch {
     return c.json({ error: { code: 'EXTRACTION_NOT_FOUND', message: 'Recognized words are no longer available.' } }, 409)
+  }
+  for (const item of input.data.items) {
+    const allowed = persisted.results.some(result => result.status === 'ambiguous' &&
+      result.item.headword === item.headword && result.item.part_of_speech === item.part_of_speech &&
+      result.item.source_context === item.source_context &&
+      result.options.some(option => option.semantic_sense === item.semantic_sense))
+    if (!allowed) return c.json({ error: { code: 'INVALID_INPUT', message: 'Select a published sense offered for this image job.' } }, 400)
   }
   const bySelection = new Map(extraction.suggestions.map(item => [JSON.stringify([
     item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
@@ -152,8 +212,16 @@ vocabulary.post('/save', async c => {
   if (items.some(item => !item)) {
     return c.json({ error: { code: 'INVALID_INPUT', message: 'Select words from this image extraction.' } }, 400)
   }
-  const plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
-    c.env, source.ai_model ?? 'unknown')
+  let plans: Awaited<ReturnType<typeof prepareVocabulary>>
+  try {
+    plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
+      c.env, source.ai_model ?? 'unknown', async () => { throw new Error('DURABLE_CHECKPOINT_REQUIRED') })
+  } catch (error) {
+    if (String(error).includes('DURABLE_CHECKPOINT_REQUIRED')) {
+      return c.json({ error: { code: 'IMAGE_JOB_CHECKPOINT_REQUIRED', message: 'This sense needs a durable image-job checkpoint.' } }, 409)
+    }
+    throw error
+  }
   const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
   const flashcards = createRepositories(c.env.DB).flashcards
   const cards = await Promise.all(results.flatMap(result => 'card_id' in result

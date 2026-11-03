@@ -1,5 +1,7 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link } from 'react-router'
+import { ApiError } from '../lib/api'
+import { clearImageJobReference, imageJobIdempotencyKey, readImageJobReference, saveImageJobId } from '../lib/image-job-storage'
 import { clientData } from '../services/data'
 import type { Flashcard, ImageVocabularySuggestion, VocabularySaveResult } from '../services/types'
 
@@ -16,61 +18,125 @@ function sameItem(a: ImageVocabularySuggestion, b: ImageVocabularySuggestion) {
   a.semantic_sense === b.semantic_sense && a.source_context === b.source_context
 }
 
+type ImageJob = Awaited<ReturnType<typeof clientData.getImageJob>>
+
 export default function ImageVocabularyCapture() {
  const [file, setFile] = useState<File | null>(null)
  const [sourceItemId, setSourceItemId] = useState('')
  const [suggestions, setSuggestions] = useState<ImageVocabularySuggestion[]>([])
  const [results, setResults] = useState<VocabularySaveResult[]>([])
  const [cards, setCards] = useState<Flashcard[]>([])
+ const [quota, setQuota] = useState<Awaited<ReturnType<typeof clientData.getImageQuota>> | null>(null)
  const [busy, setBusy] = useState(false)
- const [canRetry, setCanRetry] = useState(false)
  const [message, setMessage] = useState('')
+ const [uncertainKey, setUncertainKey] = useState('')
+
+ function applyJob(job: ImageJob) {
+  setSourceItemId(job.job_id)
+  setSuggestions(job.suggestions ?? [])
+  setResults(job.results ?? [])
+  setCards((job.cards ?? []) as Flashcard[])
+  if (job.status === 'completed') setMessage(job.suggestions?.length ? summary(job.results ?? []) : '沒有辨識到可用的英文單字，請試試更清晰的照片。')
+  else if (job.status === 'needs_attention') setMessage(`處理已暫停。請聯絡管理員並提供工作編號 ${job.job_id}。`)
+  else if (job.status === 'failed') setMessage('照片暫時無法處理，請稍後再試。')
+  else if (job.status === 'received' || job.status === 'queued') setMessage('照片已加入處理佇列…')
+  else setMessage('正在辨識照片並建立單字卡…')
+ }
+
+ async function poll(jobId: string) {
+  let delay = 1000
+  for (let attempt = 0; attempt < 8; attempt++) {
+   const job = await clientData.getImageJob(jobId)
+   applyJob(job)
+   if (['completed', 'failed', 'needs_attention'].includes(job.status)) return
+   await new Promise(resolve => window.setTimeout(resolve, delay))
+   delay = Math.min(8000, delay * 2)
+  }
+  setMessage('照片仍在處理中。離開此頁後，系統會保留進度；回來時會自動接續。')
+ }
+
+ async function recoverByKey(key: string) {
+  const job = await clientData.findImageJobByKey(key)
+  saveImageJobId(job.job_id)
+  setUncertainKey('')
+  applyJob(job)
+  if (!['completed', 'failed', 'needs_attention'].includes(job.status)) await poll(job.job_id)
+ }
+
+ async function checkUncertainStatus() {
+  if (!uncertainKey || busy) return
+  setBusy(true)
+  try {
+   await recoverByKey(uncertainKey)
+  } catch (error) {
+   if (error instanceof ApiError && error.status === 404) {
+    clearImageJobReference()
+    setUncertainKey('')
+    setMessage('No accepted upload was found. You can retry.')
+   } else setMessage('Upload status is still unclear. Check again before retrying.')
+  } finally { setBusy(false) }
+ }
+
+ useEffect(() => {  void clientData.getImageQuota().then(setQuota).catch(() => undefined)
+  const { key, id } = readImageJobReference()
+  if (!key && !id) return
+  let active = true
+  setBusy(true)
+  void (async () => {
+   try {
+    const job = key ? await clientData.findImageJobByKey(key) : await clientData.getImageJob(id!)
+    if (!active) return
+    saveImageJobId(job.job_id)
+    applyJob(job)
+    if (!['completed', 'failed', 'needs_attention'].includes(job.status)) await poll(job.job_id)
+   } catch (error) {
+    if (active) {
+     if (error instanceof ApiError && error.status === 404) clearImageJobReference()
+     else if (key) setUncertainKey(key)
+     setMessage(key ? 'Upload status is unclear. Check it before retrying.' : 'Could not restore this image job.')
+    }
+   } finally { if (active) setBusy(false) }
+  })()
+  return () => { active = false }
+ }, [])
 
  function chooseFile(event: ChangeEvent<HTMLInputElement>) {
   setFile(event.currentTarget.files?.[0] ?? null)
-  setSuggestions([]); setSourceItemId(''); setResults([]); setCards([]); setCanRetry(false); setMessage('')
- }
-
- async function save(sourceId: string, items: ImageVocabularySuggestion[]) {
-  const response = await clientData.saveVocabulary(sourceId, items.map(({ headword, part_of_speech, semantic_sense, source_context }) => ({
-   headword, part_of_speech, semantic_sense, source_context,
-  })))
-  setResults(response.results)
-  setCards(response.cards)
-  setCanRetry(false)
-  setMessage(summary(response.results))
+  if (!uncertainKey) clearImageJobReference()
+  setSuggestions([]); setSourceItemId(''); setResults([]); setCards([]); setMessage('')
  }
 
  async function analyze(event: FormEvent) {
   event.preventDefault()
-  if (!file || busy) return
-  setBusy(true); setMessage(''); setResults([]); setCards([]); setCanRetry(false)
+  if (!file || busy || uncertainKey || quota?.remaining === 0) return
+  setBusy(true); setMessage('照片正在安全上傳…'); setResults([]); setCards([])
+  const key = imageJobIdempotencyKey()
   try {
-   const extraction = await clientData.extractImageVocabulary(file)
-   setSourceItemId(extraction.source_item_id)
-   setSuggestions(extraction.suggestions)
-   if (!extraction.suggestions.length) {
-    setMessage('沒有辨識到可用的英文單字，請試試更清晰的照片。')
-    return
+   const accepted = await clientData.submitImageVocabulary(file, key)
+   saveImageJobId(accepted.job_id)
+   setQuota(accepted.quota)
+   setSourceItemId(accepted.job_id)
+   await poll(accepted.job_id)
+  } catch (error) {
+   if (error instanceof ApiError && error.status === 429) {
+    await clientData.getImageQuota().then(setQuota).catch(() => undefined)
+    setMessage('今天的照片辨識次數已用完，請在畫面顯示的重設時間後再試。')
+   } else if (error instanceof ApiError && error.status === 409) {
+    setMessage('This photo request conflicts with an earlier request. Select the photo again before retrying.')
+   } else {
+    try {
+     await recoverByKey(key)
+    } catch (recoveryError) {
+     if (recoveryError instanceof ApiError && recoveryError.status === 404) {
+      clearImageJobReference()
+      setMessage('The upload was not accepted. You can retry.')
+     } else {
+      setUncertainKey(key)
+      setMessage('Upload status is unclear. Check it before retrying.')
+     }
+    }
    }
-   setMessage('已辨識單字，正在建立卡片…')
-   try {
-    await save(extraction.source_item_id, extraction.suggestions)
-   } catch {
-    setCanRetry(true)
-    setMessage('單字已辨識，但卡片暫時無法建立。請重試。')
-   }
-  } catch {
-   setMessage('照片辨識暫時無法完成，請重試。')
   } finally { setBusy(false) }
- }
-
- async function retrySave() {
-  if (!sourceItemId || busy) return
-  setBusy(true)
-  try { await save(sourceItemId, suggestions) }
-  catch { setMessage('卡片暫時無法建立，請再試一次。') }
-  finally { setBusy(false) }
  }
 
  async function resolve(item: Extract<VocabularySaveResult, { status: 'ambiguous' }>, semanticSense: string) {
@@ -89,18 +155,20 @@ export default function ImageVocabularyCapture() {
   finally { setBusy(false) }
  }
 
+ const exhausted = quota?.remaining === 0
  return <section aria-label="AI 圖片單字辨識" className="mx-auto mt-4 w-full max-w-lg rounded-2xl border border-gray-200 bg-card-gray p-4 sm:p-5">
   <h2 className="font-semibold">用照片建立單字卡</h2>
-  <p className="mt-1 text-sm text-text-secondary">拍攝或上傳包含英文的清晰照片，自動建立最多 10 張單字卡。</p>
+  <p className="mt-1 text-sm text-text-secondary">拍攝或上傳清晰照片，自動辨識最多 10 個英文單字。</p>
+  {quota && <p className="mt-2 text-sm text-text-secondary" aria-live="polite">今日照片辨識：{quota.used} / {quota.limit}，剩餘 {quota.remaining} 次{exhausted ? `；重設時間 ${new Date(quota.resets_at).toLocaleString('zh-TW', { timeZone: 'Europe/Dublin' })}` : ''}</p>}
   <form onSubmit={analyze} className="mt-3 flex flex-col gap-3">
    <label className="flex min-h-12 flex-col justify-center gap-1 rounded-xl border border-gray-200 bg-white p-3 text-sm">拍攝照片
-    <input aria-label="拍攝照片" type="file" accept="image/*" capture="environment" onChange={chooseFile} disabled={busy} />
+    <input aria-label="拍攝照片" type="file" accept="image/*" capture="environment" onChange={chooseFile} disabled={busy || exhausted || Boolean(uncertainKey)} />
    </label>
    <label className="flex min-h-12 flex-col justify-center gap-1 rounded-xl border border-gray-200 bg-white p-3 text-sm">從裝置選擇照片
-    <input aria-label="從裝置選擇照片" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} disabled={busy} />
+    <input aria-label="從裝置選擇照片" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} disabled={busy || exhausted || Boolean(uncertainKey)} />
    </label>
    {file && <p className="truncate text-xs text-text-secondary">{file.name}</p>}
-   <button disabled={!file || busy} className="h-12 rounded-xl bg-irish-green font-semibold text-white disabled:opacity-60">{busy ? '處理中…' : '辨識並建立單字卡'}</button>
+   <button disabled={!file || busy || exhausted || Boolean(uncertainKey)} className="h-12 rounded-xl bg-irish-green font-semibold text-white disabled:opacity-60">{busy ? '處理中…' : exhausted ? '今日次數已用完' : '辨識並建立單字卡'}</button>
   </form>
   {suggestions.length > 0 && <ul className="mt-4 flex flex-col gap-2" aria-label="辨識結果">
    {suggestions.map((item, index) => {
@@ -113,8 +181,8 @@ export default function ImageVocabularyCapture() {
     </li>
    })}
   </ul>}
+  {uncertainKey && <button type="button" disabled={busy} onClick={() => void checkUncertainStatus()} className="mt-3 min-h-11 rounded-lg border border-amber-300 px-3 text-sm disabled:opacity-60">Check upload status</button>}
   {message && <p role="status" className="mt-3 text-sm text-text-secondary">{message}</p>}
-  {canRetry && <button type="button" onClick={() => void retrySave()} disabled={busy} className="mt-3 min-h-11 rounded-xl border border-irish-green px-4 text-sm font-semibold text-irish-green disabled:opacity-60">重試建立卡片</button>}
   {results.filter((item): item is Extract<VocabularySaveResult, { status: 'ambiguous' }> => item.status === 'ambiguous').map(item => <div key={`${item.item.headword}-${item.item.source_context}`} className="mt-3 rounded-xl border border-amber-200 bg-white p-3 text-sm">
    <p>無法安全判斷「{item.headword}」的詞義。請選擇符合照片內容的意思：</p>
    {item.options.map(option => <button key={option.catalog_id} type="button" disabled={busy} onClick={() => void resolve(item, option.semantic_sense)} className="mt-2 block min-h-11 w-full rounded-lg border border-gray-200 px-3 text-left hover:border-irish-green disabled:opacity-60">使用「{option.semantic_sense}」</button>)}

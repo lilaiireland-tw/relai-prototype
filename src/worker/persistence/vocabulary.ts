@@ -1,7 +1,7 @@
 import type { PersistenceDatabase, PersistenceStatement } from './d1'
 import { lexicalFields, normalizeSense, vocabularyContentHash, type CatalogRecord, type LexicalContent, type LexicalField, type VocabularyPlan } from '../services/vocabulary-catalog'
 
-type MaybeLexicalContent = Record<LexicalField, string | null | undefined>
+type MaybeLexicalContent = Partial<Record<LexicalField, string | null | undefined>> & { usage_patterns?: CatalogRecord['usage_patterns'] }
 
 export type VocabularySaveResult = {
   headword: string
@@ -19,11 +19,12 @@ export type VocabularySaveResult = {
   reason: 'invalid_content' | 'enrichment_unavailable' | 'catalog_changed' | 'save_failed'
 }
 
-function contentOf(row: Pick<CatalogRecord, LexicalField>): MaybeLexicalContent {
+function contentOf(row: Pick<CatalogRecord, LexicalField> & Partial<Pick<CatalogRecord, 'usage_patterns'>>): MaybeLexicalContent {
   return {
-    zh_tw_definition: row.zh_tw_definition,
-    english_example: row.english_example,
-    zh_tw_example_translation: row.zh_tw_example_translation,
+      zh_tw_definition: row.zh_tw_definition,
+      english_example: row.english_example,
+      zh_tw_example_translation: row.zh_tw_example_translation,
+      usage_patterns: row.usage_patterns,
   }
 }
 
@@ -34,7 +35,8 @@ function complete(content: Partial<MaybeLexicalContent>) {
 
 function sameContent(a: Partial<MaybeLexicalContent>, b: Partial<MaybeLexicalContent>) {
   return a.zh_tw_definition === b.zh_tw_definition && a.english_example === b.english_example &&
-    a.zh_tw_example_translation === b.zh_tw_example_translation
+    a.zh_tw_example_translation === b.zh_tw_example_translation &&
+    JSON.stringify(a.usage_patterns ?? []) === JSON.stringify(b.usage_patterns ?? [])
 }
 
 export async function saveVocabulary(
@@ -66,17 +68,20 @@ export async function saveVocabulary(
             zh_tw_definition = COALESCE(NULLIF(TRIM(zh_tw_definition), ''), ?),
             english_example = COALESCE(NULLIF(TRIM(english_example), ''), ?),
             zh_tw_example_translation = COALESCE(NULLIF(TRIM(zh_tw_example_translation), ''), ?),
+            usage_patterns = CASE WHEN usage_patterns = '[]' AND ? IS NOT NULL THEN ? ELSE usage_patterns END,
             content_version = content_version + 1, content_hash = ?, provenance = ?, model = ?, prompt_version = ?, updated_at = ?
             WHERE id = ? AND publication_status = 'published' AND content_version = ?
               AND (NULLIF(TRIM(zh_tw_definition), '') IS NULL OR NULLIF(TRIM(english_example), '') IS NULL
                 OR NULLIF(TRIM(zh_tw_example_translation), '') IS NULL)`)
             .bind(content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
+              content.usage_patterns?.length ? JSON.stringify(content.usage_patterns) : null,
+              content.usage_patterns?.length ? JSON.stringify(content.usage_patterns) : null,
               hash, JSON.stringify({ previous: catalog.provenance, enrichment: JSON.parse(plan.provenance) }),
               plan.model, plan.prompt_version, at, catalog.id, catalog.content_version),
           db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
-            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, created_at)
             SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
-              zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
+              zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, ?
             FROM vocabulary_catalog WHERE id = ? AND changes() > 0`).bind(crypto.randomUUID(), at, catalog.id),
         )
       } else if (!plan.target_catalog_id) {
@@ -85,18 +90,19 @@ export async function saveVocabulary(
         statements.push(
           db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech,
             part_of_speech_key, sense_key, semantic_sense, cefr_level, source_dataset, source_version,
-            provenance, zh_tw_definition, english_example, zh_tw_example_translation, publication_status,
+            provenance, zh_tw_definition, english_example, zh_tw_example_translation, usage_patterns, publication_status,
             owner_user_id, model, prompt_version, content_version, content_hash, published_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai', ?, ?, ?, ?, ?, 'published', NULL, ?, ?, 1, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai', ?, ?, ?, ?, ?, ?, 'published', NULL, ?, ?, 1, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING`)
             .bind(id, plan.item.headword, plan.normalized_key, plan.item.part_of_speech, plan.part_of_speech_key,
               plan.sense_key, plan.item.semantic_sense, plan.prompt_version, plan.provenance,
               content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
+              JSON.stringify(content.usage_patterns ?? []),
               plan.model, plan.prompt_version, hash, at, at, at),
           db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
-            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+            zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, created_at)
             SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
-              zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
+              zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, ?
             FROM vocabulary_catalog WHERE id = ? AND changes() > 0`).bind(crypto.randomUUID(), at, id),
         )
       }
@@ -242,9 +248,9 @@ export async function reviewVocabularyCandidate(
       .bind(content.zh_tw_definition, content.english_example, content.zh_tw_example_translation,
         hash, reviewProvenance, candidate.model, candidate.prompt_version, at, target.id, target.content_version)
     const version = db.prepare(`INSERT INTO vocabulary_catalog_versions (id, catalog_id, version, content_hash,
-      zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, provenance, model, prompt_version, created_at)
+      zh_tw_definition, english_example, zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, created_at)
       SELECT ?, id, content_version, content_hash, zh_tw_definition, english_example,
-        zh_tw_example_translation, irish_usage, provenance, model, prompt_version, ?
+        zh_tw_example_translation, irish_usage, usage_patterns, provenance, model, prompt_version, ?
       FROM vocabulary_catalog WHERE id = ? AND changes() > 0`)
       .bind(crypto.randomUUID(), at, target.id)
     const batch = await db.batch([update, version])
@@ -285,9 +291,9 @@ export async function reviewVocabularyCandidate(
   const batch = await db.batch([
     db.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, part_of_speech_key,
         sense_key, semantic_sense, cefr_level, source_dataset, source_version, provenance,
-      zh_tw_definition, english_example, zh_tw_example_translation, publication_status, owner_user_id,
+      zh_tw_definition, english_example, zh_tw_example_translation, usage_patterns, publication_status, owner_user_id,
       model, prompt_version, content_version, content_hash, published_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai-reviewed', ?, ?, ?, ?, ?, 'published', NULL,
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'gemini-ai-reviewed', ?, ?, ?, ?, ?, '[]', 'published', NULL,
         ?, ?, 1, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
       .bind(id, candidate.headword, candidate.normalized_key, candidate.part_of_speech, candidate.part_of_speech_key,
         senseKey, semanticSense, candidate.prompt_version, provenance,

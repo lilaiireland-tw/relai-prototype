@@ -506,6 +506,52 @@ processed
 failed
 ```
 
+## `image_vocabulary_jobs`
+
+```text
+job_id TEXT PK
+user_id TEXT NOT NULL
+idempotency_key TEXT NOT NULL
+image_hash TEXT NOT NULL
+image_key TEXT
+mime_type TEXT NOT NULL
+quota_date TEXT NOT NULL
+status TEXT NOT NULL
+stage TEXT NOT NULL
+recognized_json TEXT
+plans_json TEXT
+results_json TEXT
+provider_stage TEXT
+provider_state TEXT NOT NULL DEFAULT 'none'
+provider_results_json TEXT NOT NULL DEFAULT '{}'
+ai_model TEXT
+error_code TEXT
+lease_token TEXT
+lease_until TEXT
+lease_attempts INTEGER NOT NULL DEFAULT 0
+dispatch_attempts INTEGER NOT NULL DEFAULT 0
+next_dispatch_at TEXT NOT NULL
+created_at TEXT NOT NULL
+updated_at TEXT NOT NULL
+completed_at TEXT
+```
+
+The unique `(user_id, idempotency_key)` job identity and a D1 trigger enforce
+one accepted job per key and at most five accepted unique image jobs per
+Europe/Dublin calendar day. Queue messages contain only `job_id`; D1 keeps the
+authoritative stages, provider checkpoints and results. `image_key` refers to
+a private temporary R2 object and is cleared after cleanup.
+
+## `image_storage_cleanup_state`
+
+```text
+singleton INTEGER PK
+cursor TEXT
+```
+
+This internal singleton stores the opaque R2 listing cursor between bounded
+scheduled cleanup runs. A null cursor starts the next full sweep.
+
 ## `flashcards`
 
 ```text
@@ -594,6 +640,7 @@ content_hash TEXT
 published_at TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
+usage_patterns TEXT NOT NULL DEFAULT '[]'
 ```
 
 Canonical identity is `(normalized_key, part_of_speech_key, sense_key)`, so distinct
@@ -644,6 +691,7 @@ provenance TEXT NOT NULL
 model TEXT
 prompt_version TEXT
 created_at TEXT NOT NULL
+usage_patterns TEXT NOT NULL DEFAULT '[]'
 ```
 
 Immutable snapshot for the initial catalog content and each accepted enrichment.
@@ -678,6 +726,7 @@ reviewed_by TEXT
 reviewed_at TEXT
 created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
+usage_patterns TEXT NOT NULL DEFAULT '[]'
 ```
 
 This table and its admin API are retained for legacy review records. The normal
@@ -901,9 +950,9 @@ Server 必須用 Zod validation。
 
 Invalid AI output：
 
-- 最多 retry / repair 一次
-- failure → `processing_status=failed`
-- 不寫半成品 cards
+- 只在有證據確認請求未送達 Gemini 時才可重試
+- 外部結果不明時標示 `needs_attention`，禁止盲目重送付費請求
+- 驗證失敗不寫半成品 cards；保留可供安全恢復的 D1 階段結果
 
 ---
 
@@ -938,23 +987,17 @@ src/worker/services/ai/prompts/
 
 ## v1 Policy
 
-圖片是 transient。
+圖片是短期 transient。前端先以穩定 Idempotency-Key 建立工作；已驗證、符合大小限制的圖片暫存於私有 R2，Gemini 處理完成後刪除，D1 不保存 binary。Cloudflare Queue 僅攜帶穩定 `job_id`；D1 保存 quota reservation、job 狀態、provider 結果 checkpoint 與卡片結果。worker 以租約處理重複投遞，排程器恢復未送出的 outbox 工作與過期的安全階段。
 
 ```text
-Browser
- → Worker
- → Gemini
- → card data
- → discard image
+Browser → authenticated API → D1 job/quota + private R2 image
+                          ↓
+                      Cloudflare Queue (job_id only)
+                          ↓
+                Gemini → D1 checkpoints → canonical cards
 ```
 
-不使用：
-
-- Supabase Storage
-- R2
-- persistent base64
-
-D1 不保存 image binary。
+Queue 為 at-least-once delivery；不能保證 Gemini 外部計費結果與 D1 寫入之間 exactly-once。Gemini outcome unknown 時不可自動重試，需標記 `needs_attention` 並交由操作人員處理。staging 與 production 必須使用隔離的 Queue、DLQ、R2 bucket 和 D1；資源設定與恢復步驟見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
 
 支援優先：
 
@@ -981,7 +1024,7 @@ Prefix：
 /relaiapp/api/v1
 ```
 
-目前已實作 `GET /health`、Auth、Onboarding、Cards、Reviews、Stats、Settings，以及 `POST /vocabulary/image`、`POST /vocabulary/save`。管理員 review API 僅保留處理既有 legacy candidates；新圖片單字會逐項回傳結果並直接建立可用卡片。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。前端產品畫面已整合這些 API。
+目前已實作 `GET /health`、Auth、Onboarding、Cards、Reviews、Stats、Settings，以及 D1-backed image jobs。產品端點要求已登入且已完成必要的密碼變更；使用者身分由 session 決定。每日圖片配額在 D1 以 Europe/Dublin 日期原子保留；每個 user/key 唯一，最多辨識 10 個單字。管理員 review API 僅保留處理既有 legacy candidates。
 
 ## Auth
 
@@ -1003,20 +1046,26 @@ POST /onboarding/level
 ## Vocabulary image capture
 
 ```text
-POST /vocabulary/image
+POST /vocabulary/image-jobs
+GET  /vocabulary/image-jobs/quota
+GET  /vocabulary/image-jobs/:job_id
+GET  /vocabulary/image-jobs/by-key/:idempotency_key
+POST /vocabulary/image-jobs/:job_id/recover  (admin, safe failed stages only)
 POST /vocabulary/save
 GET  /vocabulary/review       (admin)
 POST /vocabulary/review/:id   (admin)
 ```
 
-Image extraction returns contract version 1, a user-owned `source_item_id` and
-up to 10 suggestions containing `headword`, `part_of_speech`, `semantic_sense`,
-`source_context` and `confidence`. The client submits all suggestions
-automatically. Results are explicitly `saved`, `already_saved`, `ambiguous` or
-`not_saved`; an ambiguous result includes the item and published sense options
-for user resolution. The response includes the saved card records for immediate
-display and direct links. Source images are discarded after extraction. The
-admin review endpoints remain only for existing legacy candidates.
+Image submission validates authentication, image type/size, daily quota, and
+idempotency before it accepts the image and returns HTTP 202 with a stable
+`job_id`. The client polls D1-backed status and resumes it after refresh. Queue
+messages contain no image bytes. Completed status includes up to 10 suggestions,
+`saved` / `already_saved` / `ambiguous` / `not_saved` results, and persisted cards.
+Ambiguous sense selection is owner-authorized and does not repeat Gemini
+enrichment. `POST /vocabulary/image` returns 410 during this API transition.
+Daily over-quota requests return 429 with the limit, use, remaining count, and
+next Dublin reset time. Admin recovery only requeues jobs whose provider outcome
+is safe to resume.
 
 ## Cards
 
@@ -1061,25 +1110,23 @@ PATCH /settings
 # 二十、Ingestion Flow
 
 ```text
-Request
+Authenticated upload + image validation
  ↓
-Auth middleware
+Atomic D1 idempotency + Europe/Dublin quota reservation
  ↓
-Input validation
+Private R2 image + D1 job/outbox commit
  ↓
-Create source_item(pending)
+HTTP 202; dispatcher sends {job_id}
  ↓
-Gemini
+Queue consumer claims a D1 lease
  ↓
-Zod validation
+Persist Gemini attempt state → recognize → persist response
  ↓
-D1 write cards
+Persist canonical enrichment provider results and plans
  ↓
-Update source_item(processed)
+Idempotent catalog/card writes → persist results → remove R2 image
  ↓
-Update stats
- ↓
-Response
+Owner-authorized polling returns persisted job and cards
 ```
 
 AI error：

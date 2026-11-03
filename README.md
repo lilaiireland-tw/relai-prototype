@@ -8,7 +8,7 @@ ReLai 是「哩來愛爾蘭」面向在愛爾蘭學英文的臺灣學習者所�
 - 單一 Cloudflare Worker 在相同來源提供靜態前端及 Hono API；API 路徑以 `/relaiapp/api/v1/*` 開頭。
 - 目前的 API 提供健康檢查、身分驗證、初始 CEFR-J 級別選擇／starter bootstrap，以及經驗證的 Cards、Reviews、Stats、Settings API。健康檢查只代表 Worker 可回應，不代表 D1 或產品功能已就緒。
 - Cloudflare D1 的使用者、工作階段、卡片、複習、統計與設定 repository 已接入對應 API。CEFR-J A1–B2 來源資料與 canonical vocabulary catalog 分開保存；遠端匯入與部署狀態須另行查核。前端使用這些 API，不以 fixture 作為失敗時的備援資料。
-- Gemini 圖片詞彙擷取最多辨識 10 個英文詞，並擷取詞性、詞義與上下文；完整 catalog 條目會共用，缺漏欄位只補空白。新詞彙通過 strict JSON Schema 與 deterministic field validation 後立即發布並建立單字卡；詞義不明時會提供使用者確認選項，單一項目失敗不影響其他詞。
+- Gemini 圖片詞彙擷取使用已驗證的非同步工作佇列，D1 保存工作、配額、辨識結果與卡片結果，私有 R2 暫存上傳圖片；每位使用者每天最多接受 5 張圖片（愛爾蘭時區），每張最多辨識 10 個英文詞。新詞彙通過 strict JSON Schema 與 deterministic field validation 後立即發布；詞義不明時會提供使用者確認選項。staging Queue/R2 建置、遷移順序與 Gemini 不明結果的安全處理見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
 
 ## 封閉測試帳號與登入
 
@@ -23,7 +23,7 @@ Worker 使用不透明、有效期七天的工作階段 cookie，設定 `HttpOnl
 | `develop`／staging | `relai-prototype-staging` | `relai-staging-db` |
 | `main`／production | `relai-prototype` | `relai-prod-db` |
 
-`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql` 至 `0005_canonical_sense_aware_vocabulary.sql`。遠端 migration 必須由操作人員明確執行，與 CI、部署分開；Playwright 僅自動套用隔離本機 D1 的 migration。Issue #91 的 0005 會保留現有使用者與學習資料，將舊 catalog source rows 封存並映射到 canonical records；staging 備份、演練、套用和核對步驟見 [D1 migration 流程](docs/d1-migrations.md)。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)。
+`wrangler.jsonc` 是 Worker 名稱及 D1 ID 的設定來源。Vite 在建置時選擇環境；一般開發與建置指令預設選擇 staging。兩個環境使用不同的資料庫。根目錄的 `migrations/` 是唯一的 D1 schema 來源，目前包含 `0001_initial_core_schema.sql` 至 `0006_durable_image_vocabulary_jobs.sql`。遠端 migration 必須由操作人員明確執行，與 CI、部署分開；Playwright 僅自動套用隔離本機 D1 的 migration。Issue #93 的 0006 僅新增欄位、工作表與配額觸發器，保留現有學習資料。staging 備份、演練、套用和核對步驟見 [D1 migration 流程](docs/d1-migrations.md)。僅憑儲存庫內容無法判定遠端 migration 或部署的即時狀態。詳見 [D1 環境](docs/d1-environments.md)。
 
 ## 儲存庫結構
 
@@ -88,7 +88,7 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入尚未執行。
 - CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
 - 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 保留所選級別，並為每種選擇加入相同的 20 張已審核 B1 範例卡；重試不重複建立。行為見 [starter API](docs/onboarding-starter-api.md)。
-- 圖片單字擷取：Worker 端 Gemini 最多辨識 10 個 headword、詞性、詞義與來源上下文，再查詢 canonical catalog；完整條目直接共用，只生成缺漏欄位。strict JSON Schema 與 deterministic field validation 通過後，新詞與新詞義立即發布並建立單字卡，API 會一併回傳建立的卡片。詞義不明時保守略過並提供使用者選擇既有詞義的路徑。API key 使用 `GEMINI_API_KEY` Worker secret，`GEMINI_MODEL` 預設 `gemini-3.8-flash`。只保存來源 metadata，不保存圖片本身；既有 review-needed records 保留管理員處理路徑。
+- 圖片單字擷取：已改為 D1 持久化工作、Cloudflare Queue 與 staging 私有 R2；Worker 端 Gemini 最多辨識 10 個 headword、詞性、詞義與來源上下文。完整 canonical 條目直接共用，缺漏欄位才生成；新詞與新詞義通過 strict JSON Schema 與 deterministic field validation 後發布並建立單字卡。每日 5 次配額與 Idempotency-Key 在 D1 原子保護；前端會追蹤工作並在重新整理後恢復。API key 使用 `GEMINI_API_KEY` Worker secret，`GEMINI_MODEL` 預設 `gemini-3.8-flash`。未知 Gemini 外部結果不會盲目重試；操作方式見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
 - 後續階段：PWA／離線支援。
 
 Cards API 的 `needs_review` 僅接受 `true`（從未複習或超過七天未複習）；省略表示不套用此篩選，`false` 回傳 400。卡片 PATCH 僅允許學習內容欄位；Error Log 的錯誤類型使用既有 `part_of_speech` 儲存欄位。複習由明確完成動作提交，具備事件冪等性與 D1 batch transaction；設定級別變更不刪除卡片或新增 starter pack。

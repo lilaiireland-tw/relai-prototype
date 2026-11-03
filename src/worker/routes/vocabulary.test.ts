@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../index'
 import { digestSessionToken, generateSessionToken } from '../auth/crypto'
 import { createRepositories } from '../persistence'
+import { saveVocabulary as persistVocabulary } from '../persistence/vocabulary'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import type { VocabularySelection, VocabularySuggestion } from '../services/vocabulary-image'
-import { normalizeSense } from '../services/vocabulary-catalog'
+import { normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
 
 const now = '2027-01-02T10:00:00.000Z'
 const suggestion: VocabularySuggestion = {
@@ -19,6 +20,20 @@ const completeContent = {
   zh_tw_example_translation: '她對那張舊地圖感到好奇。',
 }
 const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJ8AAAAASUVORK5CYII=', 'base64'))
+const storedImages = new Map<string, Uint8Array>()
+const queueSend = vi.fn(async (message: { job_id: string }) => { void message.job_id })
+const imageBindings = {
+  IMAGE_JOBS: { send: queueSend },
+  IMAGE_STORAGE: {
+    async put(key: string, value: Uint8Array) { storedImages.set(key, new Uint8Array(value)) },
+    async get(key: string) {
+      const value = storedImages.get(key)
+      return value ? { async arrayBuffer() { return new Uint8Array(value).buffer as ArrayBuffer } } : null
+    },
+    async delete(key: string) { storedImages.delete(key) },
+    async list() { return { objects: [...storedImages.keys()].map(key => ({ key, uploaded: new Date(now) })), truncated: false } },
+  },
+}
 
 function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
   type Executable = PersistenceStatement & { execute(): { changes: number | bigint } }
@@ -62,7 +77,7 @@ describe('authenticated canonical image vocabulary', () => {
   let sqlite: DatabaseSync
   let db: PersistenceDatabase
   const app = createApp()
-  const bindings = { GEMINI_API_KEY: 'synthetic-test-key', GEMINI_MODEL: 'gemini-3.8-flash' }
+  const bindings = { GEMINI_API_KEY: 'synthetic-test-key', GEMINI_MODEL: 'gemini-3.8-flash', ...imageBindings }
 
   beforeEach(() => {
     sqlite = new DatabaseSync(':memory:')
@@ -71,6 +86,7 @@ describe('authenticated canonical image vocabulary', () => {
       sqlite.exec(readFileSync(`migrations/${name}`, 'utf8'))
     }
     db = sqliteD1(sqlite)
+    storedImages.clear(); queueSend.mockClear()
   })
   afterEach(() => { sqlite.close(); vi.unstubAllGlobals() })
 
@@ -91,15 +107,27 @@ describe('authenticated canonical image vocabulary', () => {
       (id, user_id, source_type, raw_text, processing_status, ai_model, created_at, updated_at)
       VALUES (?, ?, 'image', ?, 'processed', 'gemini-3.8-flash', ?, ?)`)
       .bind(id, userId, JSON.stringify({ version: 1, suggestions: items }), now, now).run()
+    await db.prepare(`INSERT INTO image_vocabulary_jobs (job_id, user_id, idempotency_key, image_hash, mime_type,
+      quota_date, status, stage, results_json, next_dispatch_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'test-hash', 'image/png', '2027-01-02', 'completed', 'completed', NULL, ?, ?, ?)`)
+      .bind(id, userId, crypto.randomUUID(), now, now, now).run()
     return id
   }
 
-  function upload(cookie: string | undefined, file: File, extra = false) {
+  async function completeSource(userId: string, sourceId: string, items: VocabularySuggestion[]) {
+    const plans = await prepareVocabulary(db, items, bindings, 'gemini-3.8-flash')
+    const results = await persistVocabulary(db, userId, sourceId, plans, now)
+    const card_ids = results.flatMap(result => 'card_id' in result ? [result.card_id] : [])
+    await db.prepare('UPDATE image_vocabulary_jobs SET results_json = ? WHERE job_id = ? AND user_id = ?')
+      .bind(JSON.stringify({ results, card_ids }), sourceId, userId).run()
+  }
+
+  function upload(cookie: string | undefined, file: File, extra = false, key = crypto.randomUUID()) {
     const form = new FormData()
     form.append('image', file)
     if (extra) form.append('other', 'ignored')
-    return app.request('https://example.test/relaiapp/api/v1/vocabulary/image', {
-      method: 'POST', headers: cookie ? { Cookie: cookie } : {}, body: form,
+    return app.request('https://example.test/relaiapp/api/v1/vocabulary/image-jobs', {
+      method: 'POST', headers: cookie ? { Cookie: cookie, 'Idempotency-Key': key } : {}, body: form,
     }, { DB: db, AUTH_PEPPER: 'synthetic', ...bindings })
   }
 
@@ -129,30 +157,26 @@ describe('authenticated canonical image vocabulary', () => {
     return id
   }
 
-  it('recognizes a real image into a versioned context-only contract and stores no image bytes', async () => {
+  it('accepts a valid image as a durable 202 job and sends only its id to the Queue', async () => {
     const cookie = await session('owner')
     const payload = { version: 1, suggestions: [suggestion] }
     const gemini = vi.fn<typeof fetch>().mockResolvedValue(modelOutput(payload))
     vi.stubGlobal('fetch', gemini)
     const response = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
-    expect(response.status).toBe(200)
-    const result = await response.json() as { contract_version: number; source_item_id: string; suggestions: VocabularySuggestion[] }
-    expect(result).toMatchObject({ contract_version: 1, suggestions: [suggestion] })
-    expect(gemini).toHaveBeenCalledOnce()
-    const [url, request] = gemini.mock.calls[0]
-    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions')
-    expect(new Headers(request?.headers).get('x-goog-api-key')).toBe('synthetic-test-key')
-    expect(JSON.stringify(request?.body)).not.toContain('synthetic-test-key')
-    const source = sqlite.prepare('SELECT user_id, raw_text, ai_model FROM source_items').get() as {
-      user_id: string; raw_text: string; ai_model: string
-    }
-    expect(source).toMatchObject({ user_id: 'owner', ai_model: 'gemini-3.8-flash' })
-    expect(JSON.parse(source.raw_text)).toEqual(payload)
-    expect(source.raw_text).not.toContain(Buffer.from(png).toString('base64'))
+    expect(response.status).toBe(202)
+    const result = await response.json() as { job_id: string; status: string; quota: { used: number; remaining: number } }
+    expect(result).toMatchObject({ job_id: expect.any(String), status: 'received', quota: { used: 1, remaining: 4 } })
+    expect(gemini).not.toHaveBeenCalled()
+    expect(queueSend).toHaveBeenCalledWith({ job_id: result.job_id }, { contentType: 'json' })
+    expect(queueSend.mock.calls[0][0]).toEqual({ job_id: result.job_id })
+    expect(storedImages.has(`image-jobs/${result.job_id}`)).toBe(true)
+    expect(sqlite.prepare('SELECT id FROM source_items').all()).toEqual([])
+    expect(sqlite.prepare('SELECT status, dispatch_attempts FROM image_vocabulary_jobs WHERE job_id = ?').get(result.job_id))
+      .toEqual({ status: 'queued', dispatch_attempts: 1 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
   })
 
-  it('rejects unauthenticated, malformed uploads, unsupported models and invalid structured output', async () => {
+  it('rejects unauthenticated and malformed uploads before quota or Queue work', async () => {
     expect((await upload(undefined, new File([png], 'sample.png', { type: 'image/png' }))).status).toBe(401)
     const cookie = await session('owner')
     const gemini = vi.fn<typeof fetch>().mockResolvedValue(modelOutput({ version: 1, suggestions: [] }))
@@ -160,13 +184,26 @@ describe('authenticated canonical image vocabulary', () => {
     expect((await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }), true)).status).toBe(400)
     expect((await upload(cookie, new File([png], 'sample.jpg', { type: 'image/jpeg' }))).status).toBe(415)
     expect((await upload(cookie, new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'large.png', { type: 'image/png' }))).status).toBe(413)
-    const badModel = await app.request('https://example.test/relaiapp/api/v1/vocabulary/image', {
-      method: 'POST', headers: { Cookie: cookie }, body: (() => { const form = new FormData(); form.append('image', new File([png], 'sample.png', { type: 'image/png' })); return form })(),
+    const badModel = await app.request('https://example.test/relaiapp/api/v1/vocabulary/image-jobs', {
+      method: 'POST', headers: { Cookie: cookie, 'Idempotency-Key': crypto.randomUUID() }, body: (() => { const form = new FormData(); form.append('image', new File([png], 'sample.png', { type: 'image/png' })); return form })(),
     }, { DB: db, AUTH_PEPPER: 'synthetic', GEMINI_API_KEY: 'test', GEMINI_MODEL: 'gemini-3.8-flash-tts' })
     expect(badModel.status).toBe(503)
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(modelOutput({ suggestions: [{ ...suggestion, confidence: 'high' }] })))
-    expect((await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))).status).toBe(502)
+    const accepted = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
+    expect(accepted.status).toBe(202)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({ count: 0 })
+  })
+
+  it('rejects legacy saves without persisted job results before any Gemini call', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const gemini = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', gemini)
+    const response = await save(cookie, sourceId, [selection(suggestion)])
+    expect(response.status).toBe(409)
+    expect((await response.json() as { error: { code: string } }).error.code).toBe('IMAGE_JOB_ALREADY_PROCESSED')
+    expect(gemini).not.toHaveBeenCalled()
   })
 
   it('reuses a complete canonical sense across users without lexical AI calls', async () => {
@@ -177,7 +214,9 @@ describe('authenticated canonical image vocabulary', () => {
     const canonical = addCatalog(suggestion, completeContent, 'curious-canonical')
     const gemini = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', gemini)
+    await completeSource('owner', ownerSource, [suggestion])
     const first = await save(ownerCookie, ownerSource, [selection(suggestion)])
+    await completeSource('other', otherSource, [suggestion])
     const second = await save(otherCookie, otherSource, [selection(suggestion)])
     const firstResult = await first.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
     const secondResult = await second.json() as { results: { status: string; card_id: string }[]; cards: { id: string; source_item_id: string }[] }
@@ -203,6 +242,7 @@ describe('authenticated canonical image vocabulary', () => {
         english_example: completeContent.english_example,
         zh_tw_example_translation: completeContent.zh_tw_example_translation }] }))
     vi.stubGlobal('fetch', gemini)
+    await completeSource('owner', sourceId, [suggestion])
     const response = await save(cookie, sourceId, [selection(suggestion)])
     expect((await response.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(gemini).toHaveBeenCalledTimes(1)
@@ -224,6 +264,7 @@ describe('authenticated canonical image vocabulary', () => {
     const sourceId = await sourceItem('owner')
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
       modelOutput({ version: 1, items: [{ item_index: 0, ...completeContent }] })))
+    await completeSource('owner', sourceId, [suggestion])
     const response = await save(cookie, sourceId, [selection(suggestion)])
     const result = await response.json() as { results: { status: string; card_id: string }[]; cards: { id: string }[] }
     expect(result.results[0]).toMatchObject({ status: 'saved', card_id: result.cards[0].id })
@@ -241,6 +282,41 @@ describe('authenticated canonical image vocabulary', () => {
       .toEqual({ source_item_id: sourceId })
   })
 
+  it('generates concise Taiwan dictionary meanings and versions up to two shared usage patterns', async () => {
+    const cookie = await session('owner')
+    const sourceId = await sourceItem('owner')
+    const usagePatterns = [
+      { pattern: 'be curious about + noun', zh_tw_explanation: '對……感到好奇',
+        example: 'She is curious about the map.', zh_tw_example_translation: '她對地圖感到好奇。' },
+      { pattern: 'curious to + verb', zh_tw_explanation: '好奇想知道……',
+        example: 'I was curious to see what happened.', zh_tw_example_translation: '我很好奇接下來發生了什麼。' },
+    ]
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(modelOutput({ version: 1,
+      items: [{ item_index: 0, zh_tw_definition: '好奇的；求知的',
+        english_example: 'She was curious about the map.', zh_tw_example_translation: '她對那張地圖感到好奇。',
+        usage_patterns: usagePatterns }] }))
+    vi.stubGlobal('fetch', fetch)
+    await completeSource('owner', sourceId, [suggestion])
+    const response = await save(cookie, sourceId, [selection(suggestion)])
+    const result = await response.json() as { results: { status: string }[]; cards: { usage_patterns: unknown[] }[] }
+    expect(result.results[0].status).toBe('saved')
+    expect(result.cards[0].usage_patterns).toEqual(usagePatterns)
+    const prompt = JSON.parse(String(fetch.mock.calls[0][1]?.body)) as { input: string }
+    expect(prompt.input).toContain('1–3 concise, idiomatic Taiwan Traditional Chinese dictionary equivalents')
+    expect(prompt.input).toContain('「；」')
+    expect(prompt.input).toContain('part_of_speech')
+    expect(prompt.input).toContain('source_context')
+    expect(prompt.input).toContain('She used to walk to work.')
+    expect(prompt.input).toContain('She is used to walking to work.')
+    expect(prompt.input).toContain('She used a map to find the station.')
+    const catalog = sqlite.prepare(`SELECT zh_tw_definition, usage_patterns FROM vocabulary_catalog WHERE normalized_key = 'curious'`)
+      .get() as { zh_tw_definition: string; usage_patterns: string }
+    expect(catalog).toEqual({ zh_tw_definition: '好奇的；求知的', usage_patterns: JSON.stringify(usagePatterns) })
+    const version = sqlite.prepare(`SELECT usage_patterns FROM vocabulary_catalog_versions WHERE catalog_id =
+      (SELECT id FROM vocabulary_catalog WHERE normalized_key = 'curious')`).get() as { usage_patterns: string }
+    expect(JSON.parse(version.usage_patterns)).toEqual(usagePatterns)
+  })
+
   it('keeps two senses of bank as separate canonical IDs', async () => {
     const cookie = await session('owner')
     const bankSenses: VocabularySuggestion[] = [
@@ -255,6 +331,7 @@ describe('authenticated canonical image vocabulary', () => {
       zh_tw_example_translation: `翻譯 ${item_index}` }))
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(modelOutput({ version: 1, items: generated })))
+    await completeSource('owner', sourceId, bankSenses)
     const response = await save(cookie, sourceId, bankSenses.map(selection))
     expect((await response.json() as { results: { status: string }[] }).results.map(row => row.status))
       .toEqual(['saved', 'saved'])
@@ -278,6 +355,7 @@ describe('authenticated canonical image vocabulary', () => {
         : modelOutput({ version: 1, matches: [{ item_index: 0, action: 'new', candidate_index: null, confidence: 0.99 }] })
     })
     vi.stubGlobal('fetch', gemini)
+    await Promise.all([completeSource('owner', ownerSource, [suggestion]), completeSource('other', otherSource, [suggestion])])
     const [first, concurrent] = await Promise.all([
       save(ownerCookie, ownerSource, [selection(suggestion)]), save(otherCookie, otherSource, [selection(suggestion)]),
     ])
@@ -286,7 +364,7 @@ describe('authenticated canonical image vocabulary', () => {
     const ids = sqlite.prepare('SELECT DISTINCT vocabulary_catalog_id FROM flashcards ORDER BY vocabulary_catalog_id').all() as { vocabulary_catalog_id: string }[]
     expect(ids).toHaveLength(1)
     const retry = await save(ownerCookie, ownerSource, [selection(suggestion)])
-    expect((await retry.json() as { results: { status: string }[] }).results[0].status).toBe('already_saved')
+    expect((await retry.json() as { results: { status: string }[] }).results[0].status).toBe('saved')
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_stats WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
     expect(gemini).toHaveBeenCalledTimes(2)
@@ -304,6 +382,7 @@ describe('authenticated canonical image vocabulary', () => {
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(modelOutput({ version: 1, matches: [{ item_index: 0, action: 'ambiguous', candidate_index: null, confidence: 0.55 }] }))
       .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 1, ...completeContent }] })))
+    await completeSource('owner', sourceId, [bank, other])
     const first = await save(ownerCookie, sourceId, [selection(bank), selection(other)])
     const result = await first.json() as { results: { status: string; options?: { catalog_id: string; semantic_sense: string }[] }[]; cards: { id: string }[] }
     expect(result.results.map(item => item.status)).toEqual(['ambiguous', 'saved'])
@@ -331,6 +410,7 @@ describe('authenticated canonical image vocabulary', () => {
       { item_index: 0, ...completeContent },
       { item_index: 1, zh_tw_definition: '地圖', unexpected: 'reject this field' },
     ] })))
+    await completeSource('owner', sourceId, [suggestion, second])
     const response = await save(cookie, sourceId, [selection(suggestion), selection(second)])
     expect(response.status).toBe(200)
     expect((await response.json() as { results: { status: string; reason?: string }[] }).results)

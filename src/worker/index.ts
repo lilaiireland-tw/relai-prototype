@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { api } from './routes/api'
 import type { AuthEnv } from './auth/types'
+import { consumeImageJobs, recoverImageJobs } from './services/image-vocabulary-jobs'
 
 const apiBasePath = '/relaiapp/api/v1'
 const apiPrefix = '/relaiapp/api'
@@ -26,4 +27,13 @@ export function createApp() {
   return app
 }
 
-export default createApp()
+const worker = createApp()
+
+export default Object.assign(worker, {
+  queue(batch: Parameters<typeof consumeImageJobs>[0], env: AuthEnv['Bindings']) {
+    return consumeImageJobs(batch, env)
+  },
+  scheduled(_event: unknown, env: AuthEnv['Bindings']) {
+    return recoverImageJobs(env)
+  },
+})
