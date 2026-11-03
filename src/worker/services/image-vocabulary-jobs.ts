@@ -362,16 +362,18 @@ async function cleanupImageStorage(env: ImageJobEnv, now: Date) {
   const cutoff = now.getTime() - 24 * 60 * 60_000
   const staleObjects = objects.objects.filter(object => object.uploaded.getTime() <= cutoff)
   const keys = staleObjects.map(object => object.key)
-  const jobs = keys.length ? await env.DB.prepare('SELECT image_key FROM image_vocabulary_jobs WHERE image_key IN (' +
-    keys.map(() => '?').join(', ') + ')').bind(...keys).all<{ image_key: string }>() : { results: [] }
+  const jobs = keys.length ? await env.DB.prepare('SELECT job_id, image_key FROM image_vocabulary_jobs WHERE image_key IN (' +
+    keys.map(() => '?').join(', ') + ')').bind(...keys).all<{ job_id: string; image_key: string }>() : { results: [] }
   const jobKeys = new Set(jobs.results.map(job => job.image_key))
+  const originalKeys = new Map(jobs.results.map(job => [job.job_id, job.image_key]))
   const terminalKeys = keys.filter(key => jobKeys.has(key))
   const orphanKeys = keys.filter(key => !jobKeys.has(key))
   const cleared = terminalKeys.length ? await env.DB.prepare(`UPDATE image_vocabulary_jobs SET image_key = NULL
     WHERE image_key IN (${terminalKeys.map(() => '?').join(', ')}) AND status IN ('completed', 'failed', 'needs_attention')
-      AND updated_at <= ? RETURNING image_key`).bind(...terminalKeys, new Date(cutoff).toISOString()).all<{ image_key: string }>()
+      AND updated_at <= ? RETURNING job_id`).bind(...terminalKeys, new Date(cutoff).toISOString()).all<Pick<ImageJobRow, 'job_id'>>()
     : { results: [] }
-  const deletableKeys = [...orphanKeys, ...cleared.results.map(job => job.image_key)]
+  const clearedKeys = cleared.results.map(job => originalKeys.get(job.job_id)).filter((key): key is string => key !== undefined)
+  const deletableKeys = [...orphanKeys, ...clearedKeys]
   for (const key of deletableKeys) await env.IMAGE_STORAGE.delete(key)
   const cursorUpdate = await env.DB.prepare('UPDATE image_storage_cleanup_state SET cursor = ? WHERE singleton = 1 AND cursor IS ?')
     .bind(objects.truncated ? objects.cursor! : null, state.cursor).run()

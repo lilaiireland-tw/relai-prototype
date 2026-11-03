@@ -140,7 +140,7 @@ describe('durable image vocabulary jobs', () => {
       const quota = plan('SELECT COUNT(*) FROM image_vocabulary_jobs WHERE user_id = ? AND quota_date = ?', 'owner', '2020-01-01')
       const cleanup = plan('SELECT job_id FROM image_vocabulary_jobs WHERE image_key IN (?, ?)', 'image-jobs/1', 'image-jobs/2')
       const cleanupUpdate = plan(`UPDATE image_vocabulary_jobs SET image_key = NULL WHERE image_key IN (?, ?)
-        AND status IN ('completed', 'failed', 'needs_attention') AND updated_at <= ? RETURNING image_key`,
+        AND status IN ('completed', 'failed', 'needs_attention') AND updated_at <= ? RETURNING job_id`,
       'image-jobs/1', 'image-jobs/2', '2027-01-02T10:00:00.000Z')
       const recovery = plan(`SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at FROM (
         SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at
@@ -405,6 +405,69 @@ describe('durable image vocabulary jobs', () => {
       expect(listCalls[2]).toEqual({ prefix: 'image-jobs/', limit: 100, cursor: 'image-jobs/199' })
       expect(sqlite.prepare('SELECT cursor FROM image_storage_cleanup_state WHERE singleton = 1').get())
         .toEqual({ cursor: null })
+    } finally { sqlite.close() }
+  })
+
+  it('deletes original R2 keys only for expired terminal jobs', async () => {
+    const { sqlite, env, objects } = environment()
+    try {
+      const jobs = await Promise.all(Array.from({ length: 5 }, () =>
+        acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)))
+      const cleanupAt = new Date(now.getTime() + 25 * 60 * 60_000)
+      for (const [index, status] of ['completed', 'failed', 'needs_attention'].entries()) {
+        sqlite.prepare('UPDATE image_vocabulary_jobs SET status = ?, stage = ?, updated_at = ? WHERE job_id = ?')
+          .run(status, status, now.toISOString(), jobs[index].job.job_id)
+      }
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'recognizing', stage = 'recognizing',
+        lease_until = ?, updated_at = ? WHERE job_id = ?`)
+        .run(new Date(cleanupAt.getTime() + 60_000).toISOString(), cleanupAt.toISOString(), jobs[3].job.job_id)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'completed', stage = 'completed', updated_at = ? WHERE job_id = ?`)
+        .run(cleanupAt.toISOString(), jobs[4].job.job_id)
+      const originalKeys = jobs.map(job => job.job.image_key!)
+      const deleted: string[] = []
+      const originalDelete = env.IMAGE_STORAGE!.delete.bind(env.IMAGE_STORAGE)
+      env.IMAGE_STORAGE!.delete = async key => { deleted.push(key); await originalDelete(key) }
+
+      await recoverImageJobs(env, cleanupAt)
+
+      expect(deleted.sort()).toEqual(originalKeys.slice(0, 3).sort())
+      expect(deleted.every(key => typeof key === 'string' && key.length > 0)).toBe(true)
+      expect(objects.has(originalKeys[3])).toBe(true)
+      expect(objects.has(originalKeys[4])).toBe(true)
+      expect(sqlite.prepare('SELECT image_key FROM image_vocabulary_jobs WHERE job_id = ?').get(jobs[3].job.job_id))
+        .toEqual({ image_key: originalKeys[3] })
+      expect(sqlite.prepare('SELECT image_key FROM image_vocabulary_jobs WHERE job_id = ?').get(jobs[4].job.job_id))
+        .toEqual({ image_key: originalKeys[4] })
+    } finally { sqlite.close() }
+  })
+
+  it('retries cleanup after an R2 deletion failure without advancing the cursor', async () => {
+    const { sqlite, env, objects } = environment()
+    try {
+      const accepted = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      const key = accepted.job.image_key!
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'completed', stage = 'completed', updated_at = ? WHERE job_id = ?`)
+        .run(now.toISOString(), accepted.job.job_id)
+      const cleanupAt = new Date(now.getTime() + 25 * 60 * 60_000)
+      const originalDelete = env.IMAGE_STORAGE!.delete.bind(env.IMAGE_STORAGE)
+      const deleted: string[] = []
+      let fail = true
+      env.IMAGE_STORAGE!.delete = async value => {
+        deleted.push(value)
+        if (fail) { fail = false; throw new Error('simulated R2 failure') }
+        await originalDelete(value)
+      }
+
+      await expect(recoverImageJobs(env, cleanupAt)).rejects.toThrow('simulated R2 failure')
+      expect(objects.has(key)).toBe(true)
+      expect(sqlite.prepare('SELECT image_key FROM image_vocabulary_jobs WHERE job_id = ?').get(accepted.job.job_id))
+        .toEqual({ image_key: null })
+      expect(sqlite.prepare('SELECT cursor FROM image_storage_cleanup_state WHERE singleton = 1').get())
+        .toEqual({ cursor: null })
+
+      await recoverImageJobs(env, cleanupAt)
+      expect(deleted).toEqual([key, key])
+      expect(objects.has(key)).toBe(false)
     } finally { sqlite.close() }
   })
 })
