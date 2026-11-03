@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import {
-  acceptImageJob, imageJobStatus, imageQuota, imageQuotaWindow, processImageJob, recoverFailedImageJob,
+  acceptImageJob, consumeImageJobs, imageJobStatus, imageQuota, imageQuotaWindow, processImageJob, recoverFailedImageJob,
   recoverImageJobs, type ImageJobEnv, type ImageJobMessage, type ImageStorage,
 } from './image-vocabulary-jobs'
 
@@ -57,17 +57,50 @@ function environment() {
     VALUES ('owner', 'owner', 'Owner', 'salt', 'digest', ?, ?)`).run(now.toISOString(), now.toISOString())
   const objects = new Map<string, Uint8Array>()
   const sends: ImageJobMessage[] = []
+  const listCalls: { prefix?: string; limit?: number; cursor?: string }[] = []
   const storage: ImageStorage = {
     async put(key, value) { objects.set(key, new Uint8Array(value)) },
     async get(key) { const value = objects.get(key); return value ? { async arrayBuffer() { return new Uint8Array(value).buffer as ArrayBuffer } } : null },
     async delete(key) { objects.delete(key) },
-    async list() { return { objects: [...objects.keys()].map(key => ({ key, uploaded: now })), truncated: false } },
+    async list(options = {}) {
+      listCalls.push(options)
+      const keys = [...objects.keys()].sort()
+      const after = options.cursor ? keys.findIndex(key => key > options.cursor!) : 0
+      const start = after < 0 ? keys.length : after
+      const page = keys.slice(start, start + (options.limit ?? 100))
+      const truncated = start + page.length < keys.length
+      return { objects: page.map(key => ({ key, uploaded: now })), truncated,
+        ...(truncated ? { cursor: page[page.length - 1] } : {}) }
+    },
   }
   const env: ImageJobEnv = {
     DB: sqliteD1(sqlite), IMAGE_STORAGE: storage, GEMINI_API_KEY: 'test-key', GEMINI_MODEL: 'gemini-3.8-flash',
     IMAGE_JOBS: { async send(message) { sends.push(message) } },
   }
-  return { sqlite, env, objects, sends }
+  return { sqlite, env, objects, sends, listCalls }
+}
+
+function interleaveBeforeRun(env: ImageJobEnv, sqlMatch: string, interleave: () => void) {
+  const database = env.DB
+  let interleaved = false
+  function wrap(statement: PersistenceStatement, sql: string): PersistenceStatement {
+    return {
+      bind(...values) { return wrap(statement.bind(...values), sql) },
+      first: () => statement.first(),
+      all: () => statement.all(),
+      async run() {
+        if (!interleaved && sql.includes(sqlMatch)) {
+          interleaved = true
+          interleave()
+        }
+        return statement.run()
+      },
+    }
+  }
+  env.DB = { ...database, prepare(sql) {
+    return wrap(database.prepare(sql), sql)
+  } }
+  return () => interleaved
 }
 
 describe('durable image vocabulary jobs', () => {
@@ -106,16 +139,24 @@ describe('durable image vocabulary jobs', () => {
         .all(...values).map(row => (row as { detail: string }).detail).join('\n')
       const quota = plan('SELECT COUNT(*) FROM image_vocabulary_jobs WHERE user_id = ? AND quota_date = ?', 'owner', '2020-01-01')
       const cleanup = plan('SELECT job_id FROM image_vocabulary_jobs WHERE image_key IN (?, ?)', 'image-jobs/1', 'image-jobs/2')
-      const recovery = plan(`SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
-        SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs
-          WHERE status = 'received' AND next_dispatch_at <= ? ORDER BY next_dispatch_at LIMIT 50
-      ) UNION ALL SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
-        SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs INDEXED BY idx_image_vocabulary_jobs_recovery
+      const cleanupUpdate = plan(`UPDATE image_vocabulary_jobs SET image_key = NULL WHERE image_key IN (?, ?)
+        AND status IN ('completed', 'failed', 'needs_attention') AND updated_at <= ? RETURNING image_key`,
+      'image-jobs/1', 'image-jobs/2', '2027-01-02T10:00:00.000Z')
+      const recovery = plan(`SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at FROM (
+        SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at
+          FROM image_vocabulary_jobs WHERE status = 'received' AND next_dispatch_at <= ?
+            AND (lease_until IS NULL OR lease_until <= ?) ORDER BY next_dispatch_at LIMIT 50
+      ) UNION ALL SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at FROM (
+        SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at
+          FROM image_vocabulary_jobs INDEXED BY idx_image_vocabulary_jobs_recovery
           WHERE status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving') AND updated_at <= ?
             AND (lease_until IS NULL OR lease_until <= ?) ORDER BY updated_at, created_at LIMIT 50
-      ) LIMIT 50`, '2027-01-02T10:00:00.000Z', '2027-01-02T09:55:00.000Z', '2027-01-02T10:00:00.000Z')
+      ) LIMIT 50`, '2027-01-02T10:00:00.000Z', '2027-01-02T10:00:00.000Z',
+      '2027-01-02T09:55:00.000Z', '2027-01-02T10:00:00.000Z')
       expect(quota).toContain('idx_image_vocabulary_jobs_quota')
       expect(cleanup).toContain('idx_image_vocabulary_jobs_image_key')
+      expect(cleanupUpdate).toContain('idx_image_vocabulary_jobs_image_key')
+      expect(cleanupUpdate).not.toMatch(/SCAN image_vocabulary_jobs/)
       expect(recovery).toContain('idx_image_vocabulary_jobs_dispatch')
       expect(recovery).toContain('idx_image_vocabulary_jobs_recovery')
       expect(recovery).not.toMatch(/SCAN image_vocabulary_jobs|USE TEMP B-TREE/)
@@ -267,6 +308,103 @@ describe('durable image vocabulary jobs', () => {
       expect(await recoverFailedImageJob(env, accepted.job.job_id, now)).toBe(true)
       expect(sqlite.prepare('SELECT status, dispatch_attempts FROM image_vocabulary_jobs WHERE job_id = ?').get(accepted.job.job_id))
         .toMatchObject({ status: 'queued', dispatch_attempts: 1 })
+    } finally { sqlite.close() }
+  })
+
+  it('does not reset a job after a Queue consumer acquires its lease', async () => {
+    const { sqlite, env, sends } = environment()
+    try {
+      const accepted = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      const staleAt = new Date(now.getTime() - 10 * 60_000).toISOString()
+      const recoveryAt = new Date(now.getTime() + 6 * 60_000)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'queued', updated_at = ?, next_dispatch_at = ? WHERE job_id = ?`)
+        .run(staleAt, staleAt, accepted.job.job_id)
+      const leaseUntil = new Date(recoveryAt.getTime() + 4 * 60_000).toISOString()
+      const interleaved = interleaveBeforeRun(env, "SET status = 'received', stage = 'received',", () => {
+        sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'recognizing', stage = 'recognizing', lease_token = ?,
+          lease_until = ?, updated_at = ? WHERE job_id = ?`).run('consumer-lease', leaseUntil, recoveryAt.toISOString(), accepted.job.job_id)
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      vi.stubGlobal('fetch', fetch)
+      await recoverImageJobs(env, recoveryAt)
+      expect(interleaved()).toBe(true)
+      expect(sqlite.prepare('SELECT status, lease_token, lease_until FROM image_vocabulary_jobs WHERE job_id = ?')
+        .get(accepted.job.job_id)).toEqual({ status: 'recognizing', lease_token: 'consumer-lease', lease_until: leaseUntil })
+      expect(sends).toHaveLength(1)
+
+      const ack = vi.fn()
+      await consumeImageJobs({ messages: [1, 2].map(() => ({ body: { job_id: accepted.job.job_id }, attempts: 1,
+        ack, retry: vi.fn() })) }, env)
+      expect(ack).toHaveBeenCalledTimes(2)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { sqlite.close() }
+  })
+
+  it('does not requeue a job completed after recovery selects it', async () => {
+    const { sqlite, env, sends } = environment()
+    try {
+      const accepted = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      const staleAt = new Date(now.getTime() - 10 * 60_000).toISOString()
+      const recoveryAt = new Date(now.getTime() + 6 * 60_000)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'queued', updated_at = ?, next_dispatch_at = ? WHERE job_id = ?`)
+        .run(staleAt, staleAt, accepted.job.job_id)
+      const interleaved = interleaveBeforeRun(env, "SET status = 'received', stage = 'received',", () => {
+        sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'completed', stage = 'completed', completed_at = ?,
+          updated_at = ?, lease_token = NULL, lease_until = NULL WHERE job_id = ?`)
+          .run(recoveryAt.toISOString(), recoveryAt.toISOString(), accepted.job.job_id)
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      vi.stubGlobal('fetch', fetch)
+      await recoverImageJobs(env, recoveryAt)
+      expect(interleaved()).toBe(true)
+      expect(sqlite.prepare('SELECT status FROM image_vocabulary_jobs WHERE job_id = ?').get(accepted.job.job_id))
+        .toEqual({ status: 'completed' })
+      expect(sends).toHaveLength(1)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { sqlite.close() }
+  })
+
+  it('keeps an unknown provider outcome leased if a consumer wins the needs-attention race', async () => {
+    const { sqlite, env, sends } = environment()
+    try {
+      const accepted = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      const staleAt = new Date(now.getTime() - 10 * 60_000).toISOString()
+      const recoveryAt = new Date(now.getTime() + 6 * 60_000)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = 'recognizing', provider_state = 'started', provider_stage = 'recognition',
+        lease_token = 'expired-lease', lease_until = ?, updated_at = ? WHERE job_id = ?`)
+        .run(staleAt, staleAt, accepted.job.job_id)
+      const leaseUntil = new Date(recoveryAt.getTime() + 4 * 60_000).toISOString()
+      const interleaved = interleaveBeforeRun(env, "SET status = 'needs_attention', stage = 'needs_attention',", () => {
+        sqlite.prepare(`UPDATE image_vocabulary_jobs SET lease_token = 'consumer-lease', lease_until = ?, updated_at = ?
+          WHERE job_id = ?`).run(leaseUntil, recoveryAt.toISOString(), accepted.job.job_id)
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      vi.stubGlobal('fetch', fetch)
+      await recoverImageJobs(env, recoveryAt)
+      expect(interleaved()).toBe(true)
+      expect(sqlite.prepare('SELECT status, provider_state, lease_token, lease_until FROM image_vocabulary_jobs WHERE job_id = ?')
+        .get(accepted.job.job_id)).toEqual({ status: 'recognizing', provider_state: 'started', lease_token: 'consumer-lease', lease_until: leaseUntil })
+      expect(sends).toHaveLength(1)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { sqlite.close() }
+  })
+
+  it('advances R2 cleanup through bounded pages of more than 100 stale objects', async () => {
+    const { sqlite, env, objects, listCalls } = environment()
+    try {
+      for (let index = 0; index < 250; index++) objects.set(`image-jobs/${String(index).padStart(3, '0')}`, image)
+      const cleanupAt = new Date(now.getTime() + 25 * 60 * 60_000)
+      await recoverImageJobs(env, cleanupAt)
+      expect(objects.size).toBe(150)
+      expect(listCalls[0]).toEqual({ prefix: 'image-jobs/', limit: 100 })
+      await recoverImageJobs(env, cleanupAt)
+      expect(objects.size).toBe(50)
+      expect(listCalls[1]).toEqual({ prefix: 'image-jobs/', limit: 100, cursor: 'image-jobs/099' })
+      await recoverImageJobs(env, cleanupAt)
+      expect(objects.size).toBe(0)
+      expect(listCalls[2]).toEqual({ prefix: 'image-jobs/', limit: 100, cursor: 'image-jobs/199' })
+      expect(sqlite.prepare('SELECT cursor FROM image_storage_cleanup_state WHERE singleton = 1').get())
+        .toEqual({ cursor: null })
     } finally { sqlite.close() }
   })
 })

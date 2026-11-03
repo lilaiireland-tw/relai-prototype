@@ -542,6 +542,16 @@ Europe/Dublin calendar day. Queue messages contain only `job_id`; D1 keeps the
 authoritative stages, provider checkpoints and results. `image_key` refers to
 a private temporary R2 object and is cleared after cleanup.
 
+## `image_storage_cleanup_state`
+
+```text
+singleton INTEGER PK
+cursor TEXT
+```
+
+This internal singleton stores the opaque R2 listing cursor between bounded
+scheduled cleanup runs. A null cursor starts the next full sweep.
+
 ## `flashcards`
 
 ```text

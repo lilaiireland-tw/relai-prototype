@@ -33,6 +33,7 @@ test('core schema and password-change state match approved migrations on clean l
   assert.match(applied, /0004_normalize_vocabulary_ownership.sql/)
   assert.match(applied, /0005_canonical_sense_aware_vocabulary.sql/)
   assert.match(applied, /0006_durable_image_vocabulary_jobs.sql/)
+  assert.match(applied, /0007_image_storage_cleanup_cursor.sql/)
 
   const metadata = new Map()
   const { schema: initialSchema, history } = verifyCoreSchema((sql) => {

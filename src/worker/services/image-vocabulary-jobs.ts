@@ -8,6 +8,7 @@ import { extractVocabularyFromImage, isImageCapableGeminiModel, requestVocabular
 export const IMAGE_JOB_LIMIT = 5
 const LEASE_MS = 4 * 60_000
 const DISPATCH_LIMIT = 5
+const CLEANUP_PAGE_SIZE = 100
 
 export interface ImageJobMessage { job_id: string }
 export interface ImageJobQueue {
@@ -308,24 +309,36 @@ export async function consumeImageJobs(batch: { messages: { body: ImageJobMessag
 export async function recoverImageJobs(env: ImageJobEnv, now = new Date()) {
   const at = now.toISOString()
   const staleBefore = new Date(now.getTime() - LEASE_MS).toISOString()
-  const rows = await env.DB.prepare(`SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
-    SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs
-      WHERE status = 'received' AND next_dispatch_at <= ? ORDER BY next_dispatch_at LIMIT 50
-  ) UNION ALL SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM (
-    SELECT job_id, status, provider_state, lease_until, dispatch_attempts FROM image_vocabulary_jobs INDEXED BY idx_image_vocabulary_jobs_recovery
+  const rows = await env.DB.prepare(`SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts,
+      updated_at, next_dispatch_at FROM (
+    SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at
+      FROM image_vocabulary_jobs WHERE status = 'received' AND next_dispatch_at <= ?
+        AND (lease_until IS NULL OR lease_until <= ?) ORDER BY next_dispatch_at LIMIT 50
+  ) UNION ALL SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at FROM (
+    SELECT job_id, status, provider_state, lease_until, lease_token, dispatch_attempts, updated_at, next_dispatch_at
+      FROM image_vocabulary_jobs INDEXED BY idx_image_vocabulary_jobs_recovery
       WHERE status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving') AND updated_at <= ?
         AND (lease_until IS NULL OR lease_until <= ?) ORDER BY updated_at, created_at LIMIT 50
   ) LIMIT 50`)
-    .bind(at, staleBefore, at).all<Pick<ImageJobRow, 'job_id' | 'status' | 'provider_state' | 'lease_until' | 'dispatch_attempts'>>()
+    .bind(at, at, staleBefore, at).all<Pick<ImageJobRow, 'job_id' | 'status' | 'provider_state' | 'lease_until' |
+      'lease_token' | 'dispatch_attempts' | 'updated_at' | 'next_dispatch_at'>>()
   for (const row of rows.results) {
+    const guard = `WHERE job_id = ? AND status = ? AND provider_state = ? AND updated_at = ?
+      AND lease_until IS ? AND lease_token IS ? AND next_dispatch_at IS ?
+      AND ((status = 'received' AND next_dispatch_at <= ? AND (lease_until IS NULL OR lease_until <= ?))
+        OR (status IN ('queued', 'recognizing', 'recognized', 'enriching', 'saving') AND updated_at <= ?
+          AND (lease_until IS NULL OR lease_until <= ?)))`
+    const expected = [row.job_id, row.status, row.provider_state, row.updated_at, row.lease_until,
+      row.lease_token, row.next_dispatch_at, at, at, staleBefore, at]
     if (row.provider_state === 'started' || row.provider_state === 'unknown') {
       await env.DB.prepare(`UPDATE image_vocabulary_jobs SET status = 'needs_attention', stage = 'needs_attention',
-        error_code = 'EXTERNAL_OUTCOME_UNKNOWN', lease_token = NULL, lease_until = NULL, updated_at = ? WHERE job_id = ?`)
-        .bind(at, row.job_id).run()
+        error_code = 'EXTERNAL_OUTCOME_UNKNOWN', lease_token = NULL, lease_until = NULL, updated_at = ? ${guard}`)
+        .bind(at, ...expected).run()
     } else {
-      await env.DB.prepare(`UPDATE image_vocabulary_jobs SET status = 'received', stage = 'received', lease_token = NULL,
-        lease_until = NULL, next_dispatch_at = ?, updated_at = ? WHERE job_id = ?`)
-        .bind(at, at, row.job_id).run()
+      const result = await env.DB.prepare(`UPDATE image_vocabulary_jobs SET status = 'received', stage = 'received',
+        lease_token = NULL, lease_until = NULL, next_dispatch_at = ?, updated_at = ? ${guard}`)
+        .bind(at, at, ...expected).run()
+      if (!result.success || result.meta.changes !== 1) continue
       await dispatchImageJob(env, row.job_id, now, row.dispatch_attempts)
     }
   }
@@ -334,23 +347,35 @@ export async function recoverImageJobs(env: ImageJobEnv, now = new Date()) {
 
 async function cleanupImageStorage(env: ImageJobEnv, now: Date) {
   if (!env.IMAGE_STORAGE) return
-  const objects = await env.IMAGE_STORAGE.list({ prefix: 'image-jobs/', limit: 100 })
+  let state = await env.DB.prepare('SELECT cursor FROM image_storage_cleanup_state WHERE singleton = 1')
+    .first<{ cursor: string | null }>()
+  if (!state) {
+    const initialized = await env.DB.prepare('INSERT INTO image_storage_cleanup_state (singleton, cursor) VALUES (1, NULL) ON CONFLICT DO NOTHING').run()
+    if (!initialized.success) throw new Error('Could not initialize image storage cleanup cursor.')
+    state = { cursor: null }
+  }
+  const objects = await env.IMAGE_STORAGE.list({ prefix: 'image-jobs/', limit: CLEANUP_PAGE_SIZE,
+    ...(state.cursor === null ? {} : { cursor: state.cursor }) })
+  if (objects.truncated && (!objects.cursor || objects.cursor === state.cursor)) {
+    throw new Error('Image storage cleanup did not receive a progressing R2 cursor.')
+  }
   const cutoff = now.getTime() - 24 * 60 * 60_000
   const staleObjects = objects.objects.filter(object => object.uploaded.getTime() <= cutoff)
-  if (!staleObjects.length) return
   const keys = staleObjects.map(object => object.key)
-  const lookup = await env.DB.prepare('SELECT job_id, status, image_key, updated_at FROM image_vocabulary_jobs WHERE image_key IN (' +
-    keys.map(() => '?').join(', ') + ')')
-    .bind(...keys).all<{ job_id: string; status: JobStatus; image_key: string; updated_at: string }>()
-  const jobs = new Map(lookup.results.map(job => [job.image_key, job]))
-  for (const object of staleObjects) {
-    const job = jobs.get(object.key)
-    if (!job || (['completed', 'failed', 'needs_attention'].includes(job.status) && Date.parse(job.updated_at) <= cutoff)) {
-      await env.IMAGE_STORAGE.delete(object.key)
-      if (job) await env.DB.prepare('UPDATE image_vocabulary_jobs SET image_key = NULL WHERE job_id = ? AND image_key = ?')
-        .bind(job.job_id, object.key).run()
-    }
-  }
+  const jobs = keys.length ? await env.DB.prepare('SELECT image_key FROM image_vocabulary_jobs WHERE image_key IN (' +
+    keys.map(() => '?').join(', ') + ')').bind(...keys).all<{ image_key: string }>() : { results: [] }
+  const jobKeys = new Set(jobs.results.map(job => job.image_key))
+  const terminalKeys = keys.filter(key => jobKeys.has(key))
+  const orphanKeys = keys.filter(key => !jobKeys.has(key))
+  const cleared = terminalKeys.length ? await env.DB.prepare(`UPDATE image_vocabulary_jobs SET image_key = NULL
+    WHERE image_key IN (${terminalKeys.map(() => '?').join(', ')}) AND status IN ('completed', 'failed', 'needs_attention')
+      AND updated_at <= ? RETURNING image_key`).bind(...terminalKeys, new Date(cutoff).toISOString()).all<{ image_key: string }>()
+    : { results: [] }
+  const deletableKeys = [...orphanKeys, ...cleared.results.map(job => job.image_key)]
+  for (const key of deletableKeys) await env.IMAGE_STORAGE.delete(key)
+  const cursorUpdate = await env.DB.prepare('UPDATE image_storage_cleanup_state SET cursor = ? WHERE singleton = 1 AND cursor IS ?')
+    .bind(objects.truncated ? objects.cursor! : null, state.cursor).run()
+  if (!cursorUpdate.success) throw new Error('Could not save image storage cleanup cursor.')
 }
 
 export async function recoverFailedImageJob(env: ImageJobEnv, jobId: string, now = new Date()) {
