@@ -11,6 +11,7 @@ const { Response } = globalThis
 
 const staging = {
   name: 'relai-prototype-staging',
+  triggers: { crons: [] },
   workers_dev: true,
   routes: [],
   secrets: { required: ['AUTH_PEPPER', 'GEMINI_API_KEY'] },
@@ -152,4 +153,12 @@ test('health retries transient failures and fails after the bounded retry count'
   }), /failed after 3 attempts/)
   assert.equal(calls, 3)
   assert.equal(waits, 2)
+})
+
+test('generated staging deployment config explicitly clears previously deployed crons', () => {
+  const source = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
+  const prepared = prepareDeployConfig({ ...source, triggers: { crons: ['* * * * *'] } }, source)
+  assert.deepEqual(prepared.triggers, { crons: [] })
+  assert.equal(source.queues.consumers[0].max_batch_size, 1)
+  assert.equal(source.queues.consumers[0].max_concurrency, 5)
 })

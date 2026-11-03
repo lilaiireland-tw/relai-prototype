@@ -158,6 +158,26 @@ describe('authenticated canonical image vocabulary', () => {
     return id
   }
 
+  it('isolates active discovery and abandonment by authenticated user', async () => {
+    const owner = await session('owner')
+    const other = await session('other')
+    const response = await upload(owner, new File([png], 'sample.png', { type: 'image/png' }))
+    const { job_id } = await response.json() as { job_id: string }
+    const request = (cookie: string | undefined, path: string, method = 'GET') => app.request(
+      'https://example.test/relaiapp/api/v1/vocabulary/image-jobs/' + path,
+      { method, headers: cookie ? { Cookie: cookie } : {} }, { DB: db, AUTH_PEPPER: 'synthetic', ...bindings })
+    expect((await request(undefined, 'current')).status).toBe(401)
+    expect((await request(other, 'current')).status).toBe(404)
+    expect((await request(owner, 'current')).status).toBe(200)
+    expect((await upload(owner, new File([png], 'second.png', { type: 'image/png' }))).status).toBe(409)
+    await request(other, job_id + '/abandon', 'POST')
+    expect((await request(owner, 'current')).status).toBe(200)
+    await request(owner, job_id + '/abandon', 'POST')
+    expect((await request(owner, 'current')).status).toBe(404)
+    expect(await (await request(owner, job_id)).json()).toMatchObject({ stage: 'abandoned', status: 'failed' })
+    expect((await upload(owner, new File([png], 'next.png', { type: 'image/png' }))).status).toBe(202)
+  })
+
   it('accepts a valid image as a durable 202 job and sends only its id to the Queue', async () => {
     const cookie = await session('owner')
     const payload = { version: 1, suggestions: [suggestion] }
@@ -166,7 +186,7 @@ describe('authenticated canonical image vocabulary', () => {
     const response = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
     expect(response.status).toBe(202)
     const result = await response.json() as { job_id: string; status: string; quota: { used: number; remaining: number } }
-    expect(result).toMatchObject({ job_id: expect.any(String), status: 'received', quota: { used: 1, remaining: 4 } })
+    expect(result).toMatchObject({ job_id: expect.any(String), status: 'queued', quota: { used: 1, remaining: 4 } })
     expect(gemini).not.toHaveBeenCalled()
     expect(queueSend).toHaveBeenCalledWith({ job_id: result.job_id }, { contentType: 'json' })
     expect(queueSend.mock.calls[0][0]).toEqual({ job_id: result.job_id })

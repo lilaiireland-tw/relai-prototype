@@ -37,6 +37,7 @@ export function productServer() {
  function response(url: string, init?: RequestInit): Response {
   const path = new URL(url, 'https://example.test')
   const body = init?.body && !(init.body instanceof FormData) ? JSON.parse(String(init.body)) : {}
+  if (path.pathname.endsWith('/vocabulary/image-jobs/current')) return Response.json({ error: { code: 'IMAGE_JOB_NOT_FOUND' } }, { status: 404 })
   if (path.pathname.endsWith('/vocabulary/image-jobs/quota')) return Response.json({ limit: 5, used: 0, remaining: 5, resets_at: '2027-01-03T00:00:00.000Z' })
   if (path.pathname.endsWith('/vocabulary/image-jobs') && init?.method === 'POST') return Response.json({
    job_id: jobId, status: 'queued', quota: { limit: 5, used: 1, remaining: 4, resets_at: '2027-01-03T00:00:00.000Z' },

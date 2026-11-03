@@ -91,6 +91,12 @@ export function createApiClient(transport: typeof fetch = (...args) => globalThi
     getImageQuota() {
       return getJson('/vocabulary/image-jobs/quota', value => imageQuotaResponse.parse(value))
     },
+    getCurrentImageJob() {
+      return getJson('/vocabulary/image-jobs/current', value => imageJobResponse.parse(value))
+    },
+    abandonImageJob(id: string) {
+      return getJson(`/vocabulary/image-jobs/${encodeURIComponent(id)}/abandon`, () => undefined, {}, 'POST')
+    },
     getImageJob(id: string) {
       return getJson(`/vocabulary/image-jobs/${encodeURIComponent(id)}`, value => imageJobResponse.parse(value))
     },

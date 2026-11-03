@@ -16,3 +16,32 @@ test('restores a recognized job with no saved cards as an explicit failure', asy
   await expect(page.getByText('map', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '辨識並建立單字卡' })).toBeDisabled()
 })
+
+
+test('discovers another device session, locks uploads, and reconnects to persisted completion', async ({ page, login }) => {
+  await page.goto('login')
+  await login()
+  const id = '00000000-0000-4000-8000-000000000103'
+  let completed = false
+  let uploads = 0
+  let saves = 0
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().endsWith('/vocabulary/image-jobs')) uploads++
+    if (request.method() === 'POST' && request.url().endsWith('/vocabulary/save')) saves++
+  })
+  await page.route('**/api/v1/vocabulary/image-jobs/current', route => completed
+    ? route.fulfill({ status: 404, json: { error: { code: 'IMAGE_JOB_NOT_FOUND' } } })
+    : route.fulfill({ json: { job_id: id, status: 'queued', stage: 'queued', error_code: null } }))
+  await page.route('**/api/v1/vocabulary/image-jobs/' + id, route => route.fulfill({ json: completed
+    ? { job_id: id, status: 'completed', stage: 'completed', error_code: null, suggestions: [], results: [], cards: [] }
+    : { job_id: id, status: 'queued', stage: 'queued', error_code: null } }))
+  await page.goto('capture')
+  await expect(page.getByRole('button', { name: 'Abandon current job' })).toBeVisible()
+  for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeDisabled()
+  completed = true
+  await page.reload()
+  for (const input of await page.locator('input[type=file]').all()) await expect(input).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Abandon current job' })).toHaveCount(0)
+  expect(uploads).toBe(0)
+  expect(saves).toBe(0)
+})

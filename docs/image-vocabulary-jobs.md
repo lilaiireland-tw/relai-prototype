@@ -1,33 +1,45 @@
 # Image vocabulary jobs
 
-Image capture returns `202` after an authenticated D1 job row and per-user Dublin-day quota reservation are committed. D1 holds the job, idempotency key, recognized suggestions, provider checkpoints, and card results. Queue messages contain only `job_id`. The staging Worker uses a private R2 binding for the temporary image and its Queue consumer plus a one-minute scheduled dispatcher for the D1 outbox and expired leases.
+Issue #103 supersedes the scheduled recovery described in the original B5.5 PRD. See [ADR: event-driven image sessions](adr/001-event-driven-image-jobs.md) for the decision and operational trade-offs.
 
-## Staging setup
+Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quota reservation. Queue messages contain only `job_id`. The consumer automatically runs `processImageJob() -> prepareVocabulary() -> saveVocabulary()`, persists results/cards, then communicates completion. No manual confirmation was added. Existing ambiguous-sense resolution remains available after processing.
 
-Before enabling the Issue #93 flow in staging, an operator must create the names already declared under `env.staging` in `wrangler.jsonc`:
+## Session and recovery API
 
-```sh
-npm exec -- wrangler queues create relai-vocab-image-jobs-staging
-npm exec -- wrangler queues create relai-vocab-image-jobs-staging-dlq
-npm exec -- wrangler r2 bucket create relai-vocabulary-images-staging
-```
+- `GET /relaiapp/api/v1/vocabulary/image-jobs/current`: the authenticated user's active session, or 404.
+- `GET /relaiapp/api/v1/vocabulary/image-jobs/:id` and `/by-key/:key`: owner-scoped persisted results; these never call Gemini.
+- `POST /relaiapp/api/v1/vocabulary/image-jobs/:id/abandon`: owner-scoped, idempotent explicit abandonment. Completed/terminal jobs remain unchanged.
+- Existing admin `/:id/recover` is limited to known-safe failed stages, excludes abandoned work, and refuses another active session for that user.
 
-Then inspect the staging Queue consumer and bindings in Cloudflare. The consumer uses one message per batch, five retries, and the configured dead-letter queue. Do not expose the R2 bucket publicly. The Worker deletes completed image objects and scheduled cleanup removes old orphaned or terminal objects after 24 hours.
+A single atomic INSERT/NOT EXISTS statement enforces admission across tabs/devices. Admin recovery uses the same active-session predicate. A partial user/creation index bounds these checks to active jobs. The five accepted uploads/day trigger and user/key uniqueness remain authoritative. Abandonment/failure does not refund quota. Existing historical concurrent jobs are not rewritten; new admission waits until they finish or expire.
 
-The code and bindings are staging-only. Production requires separate Queue, DLQ, and private R2 names plus a separately reviewed production rollout; no production binding is configured by this change.
+The client waits for one task, polls only its job up to eight times with 1/2/4/8-second backoff (8-second cap), then offers explicit status-check/abandon controls. Reload discovers the server's current session before using a saved ID/key. Success displays persisted cards; failure/abandonment allows selecting another photo. No timer runs when capture is idle. A stale session expires after ten minutes from acceptance, only on a user request or delivery event. This bounds abandoned/DLQ locks without a global scanner.
 
-## D1 and release order
+## Failure semantics
 
-Migration `0006_durable_image_vocabulary_jobs.sql` only adds catalog usage-pattern columns, the job table/indexes, and the atomic daily-quota trigger. It does not rewrite or delete user, catalog, card, or review rows. Test it locally with the repository's migration checks. Before the staging Worker release, the Product Owner/operator must verify the staging backup and applied migration history, then apply the pending migration to `relai-staging-db` using the documented migration workflow. The Worker must not serve the new capture route until both the migration and staging Queue/R2 bindings exist. No remote migration or resource creation is part of this change.
+| Event | Behavior |
+| --- | --- |
+| Queue send fails or its outcome is uncertain | Fail the unleased job, release admission, delete image best effort; late messages cannot claim it. If a consumer already claimed it, retain its fence. No scheduled outbox replay. |
+| Duplicate/redelivered message | Terminal jobs are ignored; live leases suppress duplicates; known persisted provider checkpoints can resume after lease expiry. |
+| Worker interruption / lost lease | Safe Queue retry may resume known stages after the four-minute lease. If no delivery remains, the user can abandon or the ten-minute event-driven timeout releases admission. |
+| Provider outcome uncertain | Persist `needs_attention`, never automatically repeat a paid stage; admin replay is refused. If interruption prevented that write, a later delivery detects `provider_state = started` and parks it. |
+| Queue retry exhaustion / DLQ | No automatic DLQ scanning or replay; explicit abandonment or event-driven timeout releases the session. Remote inspection/replay needs separate owner authorization. |
+| Abandonment races recognition or saving | Clear the lease atomically. Provider checkpoints and source writes are fenced. Each word's catalog/card/stats batch starts with a lease assertion in the same D1 transaction; losing the fence rolls back that batch. Already committed words remain; no later words can commit. |
 
-## Query bounds and index cost
+An already-started external request cannot reliably be cancelled or unbilled. Abandonment prevents its response from persisting or saving more cards. Immediate image deletion is attempted on completion, terminal processing failure, Queue send failure, timeout and abandonment; interrupted deletion/orphan uploads rely on lifecycle expiration.
 
-The daily quota count uses `(user_id, quota_date)`, so it seeks to one user's Dublin-day range and reads at most five reserved jobs. R2 cleanup lists at most 100 objects and performs one indexed `image_key IN (...)` lookup for the stale keys, then deletes or clears at most those 100 objects/rows. The partial image-key index contains only rows with a live key.
+## Manual R2 lifecycle configuration (separate approval required)
 
-The one-minute recovery selection is one D1 read with two indexed branches: due outbox rows use `(status, next_dispatch_at)`; stale active jobs use the partial `(updated_at, created_at, lease_until)` index. The proposed `(status, updated_at, lease_until, created_at)` index was tested, but its leading status and lease columns required a temporary sort for the actual multi-status `ORDER BY updated_at, created_at`. The active-state partial index plus branch-local ordering and 50-row limits avoids a ledger scan and unbounded sort. Dispatch reuses the selected attempt count, avoiding a second read per selected row; follow-up writes and Queue sends are limited to the 50 returned rows.
+Do not execute this as part of development or PR validation. With explicit staging-specific Product Owner approval, an operator opens Cloudflare Dashboard -> R2 -> `relai-vocabulary-images-staging` -> Settings -> Object Lifecycle Rules -> Add rule. Create an enabled rule restricted to prefix `image-jobs/`, with object deletion/expiration after **1 day**. Confirm the platform's supported minimum and displayed semantics before saving; keep unrelated rules intact. Do not enable public access or change storage class. Production requires separate authorization and configuration.
 
-Migration 0006 adds CHECK-constrained usage-pattern columns to `vocabulary_catalog`, `vocabulary_catalog_versions`, and `vocabulary_catalog_candidates`. SQLite validates those constraints against existing rows, so application cost is a linear read across those three tables, with no table rebuild or row copy. Remote row counts were not queried under the Cloudflare safety restriction; the migration operator should assess current table sizes before applying it. The new job ledger is empty when its indexes are created, so its initial index build is negligible. As jobs accrue, quota, live-image-key, and active-recovery indexes add logarithmic write maintenance; the two partial indexes store only eligible rows. Migration 0005 is unchanged and is not rerun.
+[Cloudflare lifecycle documentation](https://developers.cloudflare.com/r2/buckets/object-lifecycles/) describes prefix filtering and delayed removal (typically within 24 hours of expiration, potentially longer). Expiration is not an exact deletion deadline; residual storage charges last until deletion. The ten-minute session limit is far below the one-day image retention target, so valid new processing does not depend on an image near expiry. Very old deliveries are abandoned before reading images. No lifecycle configuration was performed by this change.
 
-## Recovery
+## Deployment, migration and rollback
 
-Safe internal delivery failures use bounded Queue retries and the D1 dispatcher. Inspect the configured DLQ and job row when a message reaches it. An administrator can retry a `failed` job through the authenticated `POST /relaiapp/api/v1/vocabulary/image-jobs/:job_id/recover` route. Jobs marked `needs_attention` are deliberately excluded: Gemini may have accepted the request without the Worker persisting its result, so replaying that provider stage could repeat a billable call. Queue delivery is at least once; the D1 lease and provider checkpoints suppress duplicate work when state is known.
+Migration `0008_image_active_sessions.sql` adds only a non-unique partial index. Migrations 0001?0007 and historical cleanup tables remain unchanged. It is necessary to avoid scanning each user's entire job history for active admission. Local D1 must apply all migrations first. Before any remote application, review this migration separately and obtain a narrowly scoped environment-specific owner approval.
+
+Scan-risk assessment: index construction reads `image_vocabulary_jobs` once, tests each row's status, and indexes only active rows; no row copy/rebuild, deletion or ownership change occurs. Volume is the existing job ledger size (not remotely measured here); worst-case migration work is linear in ledger rows. The operator must assess historical size from approved evidence before migration. Subsequent checks seek `(user_id, created_at)` over active rows; normal new admission holds at most one active row per user. Historical active rows are handled by that user's event-driven expiry. Index maintenance adds writes only on job events.
+
+With separate staging migration/deployment authorization: apply reviewed 0008 before deploying the built Worker. Use the repository approval wrappers and documented release workflow. Generated staging config must contain `triggers.crons: []` explicitly, consumer batch size 1 and concurrency 5. This removes any previously installed one-minute Cron on deployment. Production configuration is unchanged. No remote verification, migration, resource operation or deployment is part of this PR.
+
+Rollback requires separate authorization: deploy a reviewed prior-compatible application with the Cron list still explicitly empty. Do not restore the old one-minute schedule unintentionally. Keep the additive index and applied migrations; do not rewrite history. Leaving the lifecycle rule enabled preserves ephemeral storage cleanup. Restoring global recovery or changing lifecycle settings requires a separate decision.

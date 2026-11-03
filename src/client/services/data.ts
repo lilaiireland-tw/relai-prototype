@@ -29,6 +29,8 @@ export const clientData = {
  submitImageVocabulary: apiClient.submitImageVocabulary,
  getImageQuota: apiClient.getImageQuota,
  getImageJob: apiClient.getImageJob,
+ getCurrentImageJob: apiClient.getCurrentImageJob,
+ abandonImageJob: apiClient.abandonImageJob,
  findImageJobByKey: apiClient.findImageJobByKey,
  saveVocabulary: apiClient.saveVocabulary,
  updateCard: apiClient.updateCard,

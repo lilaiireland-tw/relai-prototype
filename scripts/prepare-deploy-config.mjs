@@ -17,6 +17,10 @@ export function prepareDeployConfig(built, source) {
   for (const key of ['binding', 'database_name', 'database_id']) {
     assert.equal(builtDb[key], sourceDb[key], `Built D1 ${key} must match the selected deployment environment`)
   }
+  if (source.name === 'relai-prototype-staging') {
+    assert.deepEqual(source.triggers?.crons, [], 'Staging must explicitly remove Cron triggers')
+    built = { ...built, triggers: { crons: [] } }
+  }
   return { ...built, secrets: { required: requiredSecrets } }
 }
 
