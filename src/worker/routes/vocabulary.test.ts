@@ -158,6 +158,68 @@ describe('authenticated canonical image vocabulary', () => {
     return id
   }
 
+  it.each([
+    ['queued', 'queued'], ['completed', 'completed'], ['failed', 'failed'], ['failed', 'abandoned'],
+    ['needs_attention', 'needs_attention'],
+  ])('discovers latest %s/%s from the authenticated ledger without processing', async (status, stage) => {
+    const owner = await session('owner')
+    const other = await session('other')
+    const latest = (cookie?: string) => app.request('https://example.test/relaiapp/api/v1/vocabulary/image-jobs/latest',
+      { headers: cookie ? { Cookie: cookie } : {} }, { DB: db, AUTH_PEPPER: 'synthetic', ...bindings })
+    expect((await latest()).status).toBe(401)
+    expect((await latest(owner)).status).toBe(404)
+    const gemini = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', gemini)
+    const olderId = await sourceItem('owner')
+    sqlite.prepare('UPDATE image_vocabulary_jobs SET created_at = ? WHERE job_id = ?').run('2027-01-01T10:00:00.000Z', olderId)
+    const id = await sourceItem('owner')
+    addCatalog(suggestion, completeContent)
+    await completeSource('owner', id, [suggestion])
+    sqlite.prepare(`UPDATE image_vocabulary_jobs SET status = ?, stage = ?, provider_state = ?, error_code = ? WHERE job_id = ?`)
+      .run(status, stage, status === 'needs_attention' ? 'unknown' : 'completed', stage === 'abandoned' ? 'IMAGE_JOB_ABANDONED' : null, id)
+    const otherId = await sourceItem('other')
+    sqlite.prepare('UPDATE image_vocabulary_jobs SET created_at = ? WHERE job_id = ?').run('2027-01-03T10:00:00.000Z', otherId)
+    const prepare = vi.spyOn(db, 'prepare')
+    for (let reconnect = 0; reconnect < 2; reconnect++) {
+      const response = await latest(owner)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ job_id: id, status, stage,
+        results: [{ status: 'saved' }], cards: [{ front_content: 'curious', user_id: 'owner' }] })
+    }
+    expect(await (await latest(other)).json()).toMatchObject({ job_id: otherId })
+    expect(gemini).not.toHaveBeenCalled()
+    expect(queueSend).not.toHaveBeenCalled()
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM image_vocabulary_jobs').get()).toEqual({ count: 3 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 1 })
+    const sql = prepare.mock.calls.map(([sql]) => sql).find(sql => sql.includes('SELECT job_id, user_id') && sql.includes('ORDER BY created_at DESC LIMIT 1'))!
+    const plan = sqlite.prepare('EXPLAIN QUERY PLAN ' + sql).all('owner').map(row => row.detail).join(' ')
+    expect(plan).toContain('SEARCH image_vocabulary_jobs USING INDEX idx_image_vocabulary_jobs_user_created (user_id=?)')
+    expect(plan).not.toMatch(/SCAN image_vocabulary_jobs|USE TEMP B-TREE/)
+    if (status === 'failed' || status === 'completed') {
+      expect((await upload(owner, new File([png], 'next.png', { type: 'image/png' }))).status).toBe(202)
+    }
+  })
+
+  it('isolates active discovery and abandonment by authenticated user', async () => {
+    const owner = await session('owner')
+    const other = await session('other')
+    const response = await upload(owner, new File([png], 'sample.png', { type: 'image/png' }))
+    const { job_id } = await response.json() as { job_id: string }
+    const request = (cookie: string | undefined, path: string, method = 'GET') => app.request(
+      'https://example.test/relaiapp/api/v1/vocabulary/image-jobs/' + path,
+      { method, headers: cookie ? { Cookie: cookie } : {} }, { DB: db, AUTH_PEPPER: 'synthetic', ...bindings })
+    expect((await request(undefined, 'current')).status).toBe(401)
+    expect((await request(other, 'current')).status).toBe(404)
+    expect((await request(owner, 'current')).status).toBe(200)
+    expect((await upload(owner, new File([png], 'second.png', { type: 'image/png' }))).status).toBe(409)
+    await request(other, job_id + '/abandon', 'POST')
+    expect((await request(owner, 'current')).status).toBe(200)
+    await request(owner, job_id + '/abandon', 'POST')
+    expect((await request(owner, 'current')).status).toBe(404)
+    expect(await (await request(owner, job_id)).json()).toMatchObject({ stage: 'abandoned', status: 'failed' })
+    expect((await upload(owner, new File([png], 'next.png', { type: 'image/png' }))).status).toBe(202)
+  })
+
   it('accepts a valid image as a durable 202 job and sends only its id to the Queue', async () => {
     const cookie = await session('owner')
     const payload = { version: 1, suggestions: [suggestion] }
@@ -166,7 +228,7 @@ describe('authenticated canonical image vocabulary', () => {
     const response = await upload(cookie, new File([png], 'sample.png', { type: 'image/png' }))
     expect(response.status).toBe(202)
     const result = await response.json() as { job_id: string; status: string; quota: { used: number; remaining: number } }
-    expect(result).toMatchObject({ job_id: expect.any(String), status: 'received', quota: { used: 1, remaining: 4 } })
+    expect(result).toMatchObject({ job_id: expect.any(String), status: 'queued', quota: { used: 1, remaining: 4 } })
     expect(gemini).not.toHaveBeenCalled()
     expect(queueSend).toHaveBeenCalledWith({ job_id: result.job_id }, { contentType: 'json' })
     expect(queueSend.mock.calls[0][0]).toEqual({ job_id: result.job_id })

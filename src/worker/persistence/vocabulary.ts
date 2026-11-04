@@ -40,7 +40,7 @@ function sameContent(a: Partial<MaybeLexicalContent>, b: Partial<MaybeLexicalCon
 }
 
 export async function saveVocabulary(
-  db: PersistenceDatabase, userId: string, sourceItemId: string, plans: VocabularyPlan[], at: string,
+  db: PersistenceDatabase, userId: string, sourceItemId: string, plans: VocabularyPlan[], at: string, imageJobLease?: string,
 ): Promise<VocabularySaveResult[]> {
   if (!db.batch) throw new Error('D1 batch is required to save vocabulary.')
   const results: VocabularySaveResult[] = []
@@ -60,6 +60,12 @@ export async function saveVocabulary(
       const catalog = plan.catalog
       const content = plan.content as LexicalContent
       const statements: PersistenceStatement[] = []
+      if (imageJobLease) {
+        // A NOT NULL failure rolls back this whole word batch if abandonment won the race.
+        statements.push(db.prepare(`UPDATE image_vocabulary_jobs SET stage = CASE
+          WHEN lease_token = ? AND status = 'saving' THEN stage ELSE NULL END WHERE job_id = ?`)
+          .bind(imageJobLease, sourceItemId))
+      }
       if (plan.target_catalog_id && !catalog) throw new Error('Catalog enrichment target was not loaded.')
       if (catalog && !complete(contentOf(catalog))) {
         const hash = plan.content_hash ?? await vocabularyContentHash(content)

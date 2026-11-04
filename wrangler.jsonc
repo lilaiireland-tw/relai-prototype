@@ -55,7 +55,7 @@
             "retry_delay": 30, "dead_letter_queue": "relai-vocab-image-jobs-staging-dlq", "max_concurrency": 5 }
         ]
       },
-      "triggers": { "crons": ["* * * * *"] }
+      "triggers": { "crons": [] }
     },
     "production": {
       "name": "relai-prototype",

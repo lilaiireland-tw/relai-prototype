@@ -6,7 +6,7 @@ import { createRepositories } from '../persistence'
 import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary, type VocabularySaveResult } from '../persistence/vocabulary'
 import { vocabularySuggestionSchema } from '../services/vocabulary-image'
 import { normalizeHeadword, normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
-import { acceptImageJob, imageJobStatus, imageQuota, recoverFailedImageJob } from '../services/image-vocabulary-jobs'
+import { abandonImageJob, currentImageJob, acceptImageJob, imageJobStatus, imageQuota, recoverFailedImageJob } from '../services/image-vocabulary-jobs'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_MULTIPART_BYTES = MAX_IMAGE_BYTES + 64 * 1024
@@ -90,6 +90,27 @@ vocabulary.use('*', async (c, next) => { c.header('Cache-Control', 'no-store'); 
 
 vocabulary.get('/image-jobs/quota', async c => c.json(await imageQuota(c.env.DB, c.get('user').id)))
 
+vocabulary.get('/image-jobs/latest', async c => {
+  const userId = c.get('user').id
+  await currentImageJob(c.env, userId)
+  const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
+    FROM image_vocabulary_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`)
+    .bind(userId).first<Parameters<typeof imageJobStatus>[1]>()
+  if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'No previous image job.' } }, 404)
+  return c.json(await imageJobStatus(c.env.DB, job))
+})
+
+vocabulary.get('/image-jobs/current', async c => {
+  const job = await currentImageJob(c.env, c.get('user').id)
+  if (!job) return c.json({ error: { code: 'IMAGE_JOB_NOT_FOUND', message: 'No active image job.' } }, 404)
+  return c.json(await imageJobStatus(c.env.DB, job))
+})
+
+vocabulary.post('/image-jobs/:id/abandon', async c => {
+  await abandonImageJob(c.env, c.get('user').id, c.req.param('id'))
+  return c.json({ status: 'abandoned' })
+})
+
 vocabulary.post('/image-jobs', async c => {
   const image = await readImage(c.req.raw)
   if ('status' in image) {
@@ -103,6 +124,10 @@ vocabulary.post('/image-jobs', async c => {
     const accepted = await acceptImageJob(c.env, c.get('user').id, key.data, image.bytes, image.mimeType, now)
     return c.json({ job_id: accepted.job.job_id, status: accepted.job.status, quota: accepted.quota }, 202)
   } catch (error) {
+    if (String(error).includes('IMAGE_JOB_ACTIVE')) {
+      const job = await currentImageJob(c.env, c.get('user').id)
+      return c.json({ error: { code: 'IMAGE_JOB_ACTIVE', message: 'Finish or abandon the current image job.', job_id: job?.job_id } }, 409)
+    }
     if (String(error).includes('IDEMPOTENCY_CONFLICT')) {
       return c.json({ error: { code: 'IDEMPOTENCY_CONFLICT', message: 'This request key was already used for another image.' } }, 409)
     }
@@ -122,6 +147,7 @@ vocabulary.post('/image-jobs', async c => {
 })
 
 vocabulary.get('/image-jobs/by-key/:key', async c => {
+  await currentImageJob(c.env, c.get('user').id)
   const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
     FROM image_vocabulary_jobs WHERE user_id = ? AND idempotency_key = ?`)
     .bind(c.get('user').id, c.req.param('key')).first<Parameters<typeof imageJobStatus>[1]>()
@@ -130,6 +156,7 @@ vocabulary.get('/image-jobs/by-key/:key', async c => {
 })
 
 vocabulary.get('/image-jobs/:id', async c => {
+  await currentImageJob(c.env, c.get('user').id)
   const job = await c.env.DB.prepare(`SELECT job_id, user_id, status, stage, error_code, recognized_json, results_json
     FROM image_vocabulary_jobs WHERE user_id = ? AND job_id = ?`)
     .bind(c.get('user').id, c.req.param('id')).first<Parameters<typeof imageJobStatus>[1]>()
