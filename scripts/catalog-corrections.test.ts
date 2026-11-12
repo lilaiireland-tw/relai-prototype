@@ -28,12 +28,12 @@ function fixture() {
     const corrected = correctionTargets.some(target => target.id === row.id)
     sqlite.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech,
       part_of_speech_key, sense_key, semantic_sense, cefr_level, source_dataset, source_version, provenance,
-      zh_tw_definition, english_example, zh_tw_example_translation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'synthetic sense', ?, ?, ?, 'original source', ?, ?, ?, ?, ?)`)
+      zh_tw_definition, english_example, zh_tw_example_translation, usage_patterns, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'synthetic sense', ?, ?, ?, 'original source', ?, ?, ?, ?, ?, ?)`)
       .run(row.id, row.headword, row.headword.toLowerCase(), row.part_of_speech, row.part_of_speech,
         row.sense_key, row.cefr_level, row.source_dataset, row.source_version,
         corrected ? 'old definition' : null, corrected ? row.english_example : null,
-        corrected ? 'old translation' : null, at, at)
+        corrected ? 'old translation' : null, row.usage_patterns, at, at)
   }
   const snapshot = sqlite.prepare('SELECT * FROM vocabulary_catalog').all() as CatalogSnapshot[]
   const corrections = correctionTargets.map(target => {
@@ -68,7 +68,7 @@ describe('controlled catalog corrections', () => {
     }).remote).toBe(true)
   })
 
-  it('traces 52 corrections, completes 60 starters, preserves corrected B1 and is write-free on rerun', async () => {
+  it('traces 52 synthetic corrections and all 80 starters, preserving existing usage patterns on rerun', async () => {
     const f = fixture()
     try {
       expect(f.plan.trace).toHaveLength(52)
@@ -85,7 +85,8 @@ describe('controlled catalog corrections', () => {
         expect(stored).toMatchObject({ zh_tw_definition: row.zh_tw_definition, english_example: row.english_example,
           zh_tw_example_translation: row.zh_tw_example_translation, content_version: 2, publication_status: 'published', owner_user_id: null })
         expect(stored.content_hash).toBe(await vocabularyContentHash({ zh_tw_definition: row.zh_tw_definition,
-          english_example: row.english_example, zh_tw_example_translation: row.zh_tw_example_translation, usage_patterns: [] }))
+          english_example: row.english_example, zh_tw_example_translation: row.zh_tw_example_translation,
+          usage_patterns: JSON.parse(row.usage_patterns) }))
         expect(JSON.parse(String(stored.provenance)).previous).toBe('original source')
       }
       expect(f.sqlite.prepare('SELECT COUNT(*) AS n FROM vocabulary_catalog_versions').get()).toEqual({ n: 112 })
