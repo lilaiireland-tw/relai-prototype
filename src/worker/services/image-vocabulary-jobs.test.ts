@@ -200,11 +200,15 @@ describe('durable image vocabulary jobs', () => {
     } finally { sqlite.close() }
   })
 
-  it('skips owned canonical senses before enrichment and keeps catalog CEFR priority with unknown fallback', async () => {
+  it.each([false, true])('preserves suggestion/result correspondence and CEFR card order (checkpoint replay: %s)', async replay => {
     const { sqlite, env } = environment()
     try {
-      const items = ['unknown', 'lower', 'target', 'owned'].map(headword => ({ ...suggestion, headword }))
-      items.forEach((item, index) => addCatalog(sqlite, item.headword, item, [null, 'A2', 'B1', 'B1'][index]))
+      const keys = ['unknown', 'lower', 'target', 'owned']
+      const items = keys.map((key, index) => ({ ...suggestion,
+        headword: index === 1 || index === 2 ? 'bank' : key,
+        semantic_sense: index === 1 ? 'financial institution' : index === 2 ? 'land beside a river' : suggestion.semantic_sense,
+      }))
+      items.forEach((item, index) => addCatalog(sqlite, keys[index], item, [null, 'A2', 'B1', 'B1'][index]))
       sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id, created_at, updated_at)
         VALUES ('original', 'owner', 'vocabulary', 'owned', ?, ?)`).run(now.toISOString(), now.toISOString())
       sqlite.prepare(`INSERT INTO user_settings (user_id, timezone, english_level, created_at, updated_at) VALUES ('owner', 'UTC', 'B1', ?, ?)`)
@@ -213,12 +217,37 @@ describe('durable image vocabulary jobs', () => {
       vi.stubGlobal('fetch', provider)
       const prepare = vi.spyOn(env.DB, 'prepare')
       const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
-      await processImageJob(env, job.job_id, () => now)
+      if (replay) {
+        interleaveBeforeRun(env, 'SET results_json = ?, status = ?', () => { throw new Error('simulated final-status crash') })
+        await expect(processImageJob(env, job.job_id, () => now)).rejects.toThrow('simulated final-status crash')
+        // Simulate a checkpoint persisted by the earlier CEFR-sorting implementation.
+        const stored = sqlite.prepare('SELECT plans_json FROM image_vocabulary_jobs WHERE job_id = ?')
+          .get(job.job_id) as { plans_json: string }
+        sqlite.prepare('UPDATE image_vocabulary_jobs SET plans_json = ? WHERE job_id = ?')
+          .run(JSON.stringify(JSON.parse(stored.plans_json).reverse()), job.job_id)
+      }
+      await processImageJob(env, job.job_id, () => new Date(now.getTime() + (replay ? 5 * 60_000 : 0)))
       const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
       const status = await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])
       expect(status.cards).toHaveLength(3)
-      expect(status.results?.filter(item => item.status === 'saved').map(item => item.headword)).toEqual(['target', 'lower', 'unknown'])
+      expect(status.suggestions).toEqual(items.map(item => ({ ...item, contextual_support: 'clear' })))
+      expect(status.results?.map(item => item.headword)).toEqual(items.map(item => item.headword))
+      const catalogId = (id: string) => (sqlite.prepare('SELECT vocabulary_catalog_id FROM flashcards WHERE id = ?')
+        .get(id) as { vocabulary_catalog_id: string }).vocabulary_catalog_id
+      expect(status.results?.map(result => 'card_id' in result ? catalogId(result.card_id) : result.reason))
+        .toEqual(['unknown', 'lower', 'target', 'already_owned'])
+      expect(status.results?.slice(0, 3).map(result => result.status))
+        .toEqual(Array(3).fill(replay ? 'already_saved' : 'saved'))
+      expect(status.cards?.map(card => catalogId((card as { id: string }).id))).toEqual(['target', 'lower', 'unknown'])
+      const checkpoint = sqlite.prepare('SELECT plans_json, results_json FROM image_vocabulary_jobs WHERE job_id = ?')
+        .get(job.job_id) as { plans_json: string; results_json: string }
+      expect(JSON.parse(checkpoint.plans_json).map((plan: { item: unknown }) => plan.item))
+        .toEqual(replay ? [...status.suggestions!].reverse() : status.suggestions)
+      expect(JSON.parse(checkpoint.results_json).results).toEqual(status.results)
       expect(status.results).toContainEqual({ headword: 'owned', status: 'skipped', reason: 'already_owned' })
+      expect(provider).toHaveBeenCalledOnce()
+      await processImageJob(env, job.job_id, () => now)
+      expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).toEqual(status)
       expect(provider).toHaveBeenCalledOnce()
       const lookups = prepare.mock.calls.map(([sql]) => sql).filter(sql => sql.startsWith('SELECT * FROM (SELECT id,'))
       expect(lookups).toHaveLength(1)

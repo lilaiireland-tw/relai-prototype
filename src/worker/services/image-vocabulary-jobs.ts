@@ -271,6 +271,16 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
 
     const savedPlans = job.plans_json ? JSON.parse(job.plans_json) as VocabularyPlan[] : null
     let plans = savedPlans
+    if (savedPlans) {
+      plans = extracted.suggestions!.map(value => {
+        const item = value as VocabularySuggestion
+        const plan = savedPlans.find(plan => plan.item.headword === item.headword &&
+          plan.item.part_of_speech === item.part_of_speech && plan.item.semantic_sense === item.semantic_sense &&
+          plan.item.source_context === item.source_context)
+        if (!plan) throw new Error('Image job plan does not match recognized vocabulary.')
+        return plan
+      })
+    }
     if (!plans) {
       await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET status = 'enriching', stage = 'enriching', updated_at = ?
         WHERE job_id = ? AND lease_token = ?`, [clock().toISOString(), jobId, lease])
@@ -278,14 +288,6 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
         _env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string }, stage?: string) =>
         providerRequest(env, job, lease, stage ?? 'catalog_generation', input, schema, clock)
       plans = await prepareVocabulary(env.DB, extracted.suggestions as VocabularySuggestion[], env, job.ai_model ?? model, generationRequest, job.user_id)
-      // Catalog levels only order eligible senses; unknown levels remain candidates.
-      if (englishLevel) {
-        const rank = (plan: VocabularyPlan) => {
-          const level = ENGLISH_LEVELS.findIndex(level => level === plan.catalog?.cefr_level)
-          return level < 0 ? ENGLISH_LEVELS.length : Math.abs(level - ENGLISH_LEVELS.indexOf(englishLevel))
-        }
-        plans.sort((a, b) => rank(a) - rank(b))
-      }
       const serialized = JSON.stringify(plans)
       await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET plans_json = ?, status = 'saving', stage = 'saving', updated_at = ?
         WHERE job_id = ? AND lease_token = ?`, [serialized, clock().toISOString(), jobId, lease])
@@ -293,7 +295,16 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
     await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET status = 'saving', stage = 'saving'
       WHERE job_id = ? AND lease_token = ?`, [jobId, lease])
     const saved = await saveVocabulary(env.DB, job.user_id, job.job_id, plans, clock().toISOString(), lease)
-    const cards = await Promise.all(saved.flatMap(result => 'card_id' in result
+    // Preserve suggestions/results positions; apply CEFR priority only to cards.
+    const rankedResults = saved.map((result, index) => ({ result, plan: plans[index] }))
+    if (englishLevel) {
+      const rank = (plan: VocabularyPlan) => {
+        const level = ENGLISH_LEVELS.findIndex(level => level === plan.catalog?.cefr_level)
+        return level < 0 ? ENGLISH_LEVELS.length : Math.abs(level - ENGLISH_LEVELS.indexOf(englishLevel))
+      }
+      rankedResults.sort((a, b) => rank(a.plan) - rank(b.plan))
+    }
+    const cards = await Promise.all(rankedResults.flatMap(({ result }) => 'card_id' in result
       ? [createRepositories(env.DB).flashcards.find(job.user_id, result.card_id)] : []))
     const hasCards = saved.some(result => result.status === 'saved' || result.status === 'already_saved')
     const noCardsSaved = saved.some(result => result.status === 'not_saved') && !hasCards

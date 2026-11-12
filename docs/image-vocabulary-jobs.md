@@ -1,5 +1,7 @@
 # Image vocabulary jobs
 
+`suggestions` and `results` retain recognition order: `results[i]` describes `suggestions[i]`, including skipped entries. `cards` contains only saved/previously saved cards and is ordered separately by catalog CEFR priority; associate cards through each result's `card_id`, never by array position or headword alone. New plan checkpoints retain source order; replay restores that order for older sorted plans using the full suggestion identity. Existing terminal jobs are not rewritten.
+
 Issue #103 supersedes the scheduled recovery described in the original B5.5 PRD. See [ADR: event-driven image sessions](adr/001-event-driven-image-jobs.md) for the decision and operational trade-offs.
 
 Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quota reservation. Queue messages contain only `job_id`. The consumer automatically runs `processImageJob() -> prepareVocabulary() -> saveVocabulary()`, persists results/cards, then communicates completion. Uncertain senses are skipped without manual confirmation; legacy `resolve_sense` requests return 410 and `/vocabulary/save` only replays persisted results.
