@@ -1,4 +1,4 @@
 {
-  "enabled": false,
-  "migrations": null
+  "enabled": true,
+  "migrations": "aa87c0786f6889d7abeaa34dfd848847677667c3c5a7cc761bf5799aba3d3607"
 }
