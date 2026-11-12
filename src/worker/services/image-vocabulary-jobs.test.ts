@@ -179,6 +179,66 @@ describe('durable image vocabulary jobs', () => {
     } finally { sqlite.close() }
   })
 
+  it.each([false, true])('does not let ambiguous words hide a zero-card failure (valid generation: %s)', async valid => {
+    const { sqlite, env } = environment()
+    try {
+      const suggestions = [suggestion, { ...suggestion, headword: 'map', confidence: 0.5 }]
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 1, suggestions }))
+        .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 0, ...(valid ? {
+          zh_tw_definition: 'definition', english_example: 'She is curious.', zh_tw_example_translation: 'translation',
+        } : {}) }] }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).toMatchObject({
+        status: valid ? 'completed' : 'failed', stage: valid ? 'completed' : 'failed',
+        error_code: valid ? null : 'NO_CARDS_SAVED',
+        results: [{ status: valid ? 'saved' : 'not_saved' }, { status: 'ambiguous' }],
+        cards: valid ? [expect.objectContaining({ front_content: 'curious' })] : [],
+      })
+      const ack = vi.fn()
+      const retry = vi.fn()
+      await consumeImageJobs({ messages: [{ body: { job_id: job.job_id }, attempts: 2, ack, retry }] }, env)
+      expect(ack).toHaveBeenCalledOnce()
+      expect(retry).not.toHaveBeenCalled()
+      expect(provider).toHaveBeenCalledTimes(2)
+      expect((await imageQuota(env.DB, 'owner', now)).used).toBe(1)
+    } finally { sqlite.close() }
+  })
+
+  it.each(['invalid_json', 'invalid_schema', 'persistence_failure'])('reports %s after recognition without retrying the provider', async failure => {
+    const { sqlite, env, objects } = environment()
+    try {
+      const generated = modelOutput({ version: 1, items: [{ item_index: 0,
+        zh_tw_definition: 'definition', english_example: 'She is curious.', zh_tw_example_translation: 'translation' }] })
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 1, suggestions: [suggestion] }))
+        .mockResolvedValueOnce(failure === 'invalid_json'
+          ? Response.json({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: '{' }] }] })
+          : failure === 'invalid_schema' ? modelOutput({ version: 2, items: [] }) : generated)
+      vi.stubGlobal('fetch', provider)
+      if (failure === 'persistence_failure') sqlite.exec(`CREATE TRIGGER reject_card BEFORE INSERT ON flashcards
+        BEGIN SELECT RAISE(ABORT, 'simulated persistence failure'); END`)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).toMatchObject({
+        status: failure === 'invalid_json' ? 'needs_attention' : 'failed',
+        error_code: failure === 'invalid_json' ? 'EXTERNAL_OUTCOME_UNKNOWN' : 'NO_CARDS_SAVED',
+        suggestions: [suggestion],
+        ...(failure === 'invalid_json' ? {} : { results: [{ status: 'not_saved',
+          reason: failure === 'invalid_schema' ? 'invalid_content' : 'save_failed' }], cards: [] }),
+      })
+      await processImageJob(env, job.job_id, () => now)
+      expect(provider).toHaveBeenCalledTimes(2)
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog').get()).toEqual({ count: 0 })
+      expect(objects.size).toBe(0)
+    } finally { sqlite.close() }
+  })
+
   it('resumes the saving checkpoint without provider calls or duplicate cards after a final-status write fails', async () => {
     const { sqlite, env } = environment()
     try {

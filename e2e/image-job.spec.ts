@@ -1,21 +1,29 @@
 import { test, expect } from './fixtures'
 
-test('restores a recognized job with no saved cards as an explicit failure', async ({ page, login }) => {
+for (const hasAmbiguousWord of [false, true]) {
+test(`restores a zero-card failure (ambiguous word: ${hasAmbiguousWord})`, async ({ page, login }) => {
   await page.goto('login')
   await login()
   await page.evaluate(() => localStorage.clear())
+  const ambiguousItem = { headword: 'curious', part_of_speech: 'adjective', semantic_sense: 'eager to know',
+    source_context: 'She is curious.', confidence: 0.5 }
   await page.route('**/api/v1/vocabulary/image-jobs/latest', route => route.fulfill({ json: {
     job_id: '00000000-0000-4000-8000-000000000101', status: 'failed', stage: 'failed', error_code: 'NO_CARDS_SAVED',
     suggestions: [{ headword: 'map', part_of_speech: 'noun', semantic_sense: 'a drawing of an area',
-      source_context: 'Read the map.', confidence: 0.99 }],
-    results: [{ headword: 'map', status: 'not_saved', reason: 'invalid_content' }], cards: [],
+      source_context: 'Read the map.', confidence: 0.99 }, ...(hasAmbiguousWord ? [ambiguousItem] : [])],
+    results: [{ headword: 'map', status: 'not_saved', reason: 'invalid_content' }, ...(hasAmbiguousWord ? [{
+      headword: 'curious', status: 'ambiguous', reason: 'low_confidence',
+      item: ambiguousItem, options: [],
+    }] : [])], cards: [],
   } }))
   await page.goto('capture')
   await expect(page.getByRole('status')).toContainText('已辨識圖片，但沒有可儲存的單字卡。')
   await expect(page.getByRole('status')).toContainText('1 個項目無法建立')
+  await expect(page.getByRole('status')).toContainText(`${hasAmbiguousWord ? 1 : 0} 個詞義需要確認`)
   await expect(page.getByText('map', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '辨識並建立單字卡' })).toBeDisabled()
 })
+}
 
 
 test('discovers another device session, locks uploads, and reconnects to persisted completion', async ({ page, login }) => {

@@ -284,11 +284,12 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
     const cards = await Promise.all(saved.flatMap(result => 'card_id' in result
       ? [createRepositories(env.DB).flashcards.find(job.user_id, result.card_id)] : []))
     const resultJson = JSON.stringify({ results: saved, card_ids: cards.flatMap(card => card ? [card.id] : []) })
-    const allFailed = saved.length > 0 && saved.every(result => result.status === 'not_saved')
-    const status = allFailed ? 'failed' : 'completed'
+    const noCardsSaved = saved.some(result => result.status === 'not_saved') &&
+      !saved.some(result => result.status === 'saved' || result.status === 'already_saved')
+    const status = noCardsSaved ? 'failed' : 'completed'
     await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET results_json = ?, status = ?, stage = ?, error_code = ?,
       completed_at = ?, image_key = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?
-      WHERE job_id = ? AND lease_token = ?`, [resultJson, status, status, allFailed ? 'NO_CARDS_SAVED' : null,
+      WHERE job_id = ? AND lease_token = ?`, [resultJson, status, status, noCardsSaved ? 'NO_CARDS_SAVED' : null,
       clock().toISOString(), clock().toISOString(), jobId, lease])
     if (job.image_key) await env.IMAGE_STORAGE.delete(job.image_key).catch(() => undefined)
   } catch (error) {
