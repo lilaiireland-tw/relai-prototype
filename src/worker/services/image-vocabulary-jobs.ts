@@ -2,6 +2,7 @@ import type { PersistenceDatabase } from '../persistence/d1'
 import { createRepositories } from '../persistence'
 import { saveVocabulary, type VocabularySaveResult } from '../persistence/vocabulary'
 import { prepareVocabulary, type VocabularyPlan } from './vocabulary-catalog'
+import { ENGLISH_LEVELS } from '../persistence/starter-pack'
 import { extractVocabularyFromImage, isImageCapableGeminiModel, requestVocabularyJson,
   type VocabularySuggestion } from './vocabulary-image'
 
@@ -40,11 +41,12 @@ interface ImageJobRow {
   lease_until: string | null; lease_attempts: number; dispatch_attempts: number; next_dispatch_at: string
   created_at: string; updated_at: string; completed_at: string | null
 }
-interface ProviderResult { model: string; value: unknown }
+interface ProviderResult { model: string; value: unknown; checkpoint?: boolean }
 export interface ImageQuota { limit: number; used: number; remaining: number; resets_at: string }
 export type ImageJobStatusResponse = {
   job_id: string; status: JobStatus; stage: string; error_code: string | null
   suggestions?: unknown[]; results?: VocabularySaveResult[]; cards?: unknown[]
+  outcome?: string
 }
 
 const dublinDate = new Intl.DateTimeFormat('en-CA', {
@@ -168,7 +170,7 @@ async function providerRequest(
   let results: Record<string, ProviderResult> = {}
   try { results = JSON.parse(job.provider_results_json) as Record<string, ProviderResult> }
   catch { results = {} }
-  if (results[stage]) return results[stage]
+  if (results[stage]) return { ...results[stage], checkpoint: true }
 
   await fencedUpdate(env, job.job_id, lease, `UPDATE image_vocabulary_jobs SET status = ?, stage = ?, provider_stage = ?,
       provider_state = 'started', updated_at = ? WHERE job_id = ? AND lease_token = ?`,
@@ -191,7 +193,7 @@ async function providerRequest(
 function jobExtraction(value: string | null) {
   if (!value) return null
   try {
-    const parsed = JSON.parse(value) as { version?: number; suggestions?: unknown[] }
+    const parsed = JSON.parse(value) as { version?: number; suggestions?: unknown[]; outcome?: string }
     return parsed.version === 1 && Array.isArray(parsed.suggestions) ? parsed : null
   } catch { return null }
 }
@@ -233,6 +235,8 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
         WHERE job_id = ? AND lease_token = ?`, [clock().toISOString(), jobId, lease])
       return
     }
+    const settings = await createRepositories(env.DB).userSettings.find(job.user_id)
+    const englishLevel = ENGLISH_LEVELS.find(level => level === settings?.english_level) ?? null
     let extracted = jobExtraction(job.recognized_json)
     if (!extracted) {
       const object = job.image_key ? await env.IMAGE_STORAGE.get(job.image_key) : null
@@ -245,14 +249,14 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
       const bytes = new Uint8Array(await object.arrayBuffer())
       const recognitionRequest = (input: unknown, schema: Record<string, unknown>) =>
         providerRequest(env, job, lease, 'recognition', input, schema, clock)
-      const recognized = await extractVocabularyFromImage(bytes, job.mime_type, env, recognitionRequest)
+      const recognized = await extractVocabularyFromImage(bytes, job.mime_type, env, recognitionRequest, englishLevel)
       if (!recognized) {
         await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET status = 'failed', stage = 'failed',
           error_code = 'INVALID_PROVIDER_OUTPUT', lease_token = NULL, lease_until = NULL, updated_at = ?
           WHERE job_id = ? AND lease_token = ?`, [clock().toISOString(), jobId, lease])
         return
       }
-      extracted = { version: 1, suggestions: recognized.suggestions }
+      extracted = { version: 1, suggestions: recognized.suggestions, outcome: recognized.outcome }
       const raw = JSON.stringify(extracted)
       if (!env.DB.batch) throw new Error('D1 batch is required to persist recognition results.')
       await env.DB.batch([
@@ -267,13 +271,23 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
 
     const savedPlans = job.plans_json ? JSON.parse(job.plans_json) as VocabularyPlan[] : null
     let plans = savedPlans
+    if (savedPlans) {
+      plans = extracted.suggestions!.map(value => {
+        const item = value as VocabularySuggestion
+        const plan = savedPlans.find(plan => plan.item.headword === item.headword &&
+          plan.item.part_of_speech === item.part_of_speech && plan.item.semantic_sense === item.semantic_sense &&
+          plan.item.source_context === item.source_context)
+        if (!plan) throw new Error('Image job plan does not match recognized vocabulary.')
+        return plan
+      })
+    }
     if (!plans) {
       await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET status = 'enriching', stage = 'enriching', updated_at = ?
         WHERE job_id = ? AND lease_token = ?`, [clock().toISOString(), jobId, lease])
       const generationRequest = (input: unknown, schema: Record<string, unknown>,
         _env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string }, stage?: string) =>
         providerRequest(env, job, lease, stage ?? 'catalog_generation', input, schema, clock)
-      plans = await prepareVocabulary(env.DB, extracted.suggestions as VocabularySuggestion[], env, job.ai_model ?? model, generationRequest)
+      plans = await prepareVocabulary(env.DB, extracted.suggestions as VocabularySuggestion[], env, job.ai_model ?? model, generationRequest, job.user_id)
       const serialized = JSON.stringify(plans)
       await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET plans_json = ?, status = 'saving', stage = 'saving', updated_at = ?
         WHERE job_id = ? AND lease_token = ?`, [serialized, clock().toISOString(), jobId, lease])
@@ -281,14 +295,27 @@ export async function processImageJob(env: ImageJobEnv, jobId: string, clock: ()
     await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET status = 'saving', stage = 'saving'
       WHERE job_id = ? AND lease_token = ?`, [jobId, lease])
     const saved = await saveVocabulary(env.DB, job.user_id, job.job_id, plans, clock().toISOString(), lease)
-    const cards = await Promise.all(saved.flatMap(result => 'card_id' in result
+    // Preserve suggestions/results positions; apply CEFR priority only to cards.
+    const rankedResults = saved.map((result, index) => ({ result, plan: plans[index] }))
+    if (englishLevel) {
+      const rank = (plan: VocabularyPlan) => {
+        const level = ENGLISH_LEVELS.findIndex(level => level === plan.catalog?.cefr_level)
+        return level < 0 ? ENGLISH_LEVELS.length : Math.abs(level - ENGLISH_LEVELS.indexOf(englishLevel))
+      }
+      rankedResults.sort((a, b) => rank(a.plan) - rank(b.plan))
+    }
+    const cards = await Promise.all(rankedResults.flatMap(({ result }) => 'card_id' in result
       ? [createRepositories(env.DB).flashcards.find(job.user_id, result.card_id)] : []))
-    const resultJson = JSON.stringify({ results: saved, card_ids: cards.flatMap(card => card ? [card.id] : []) })
-    const allFailed = saved.length > 0 && saved.every(result => result.status === 'not_saved')
-    const status = allFailed ? 'failed' : 'completed'
+    const hasCards = saved.some(result => result.status === 'saved' || result.status === 'already_saved')
+    const noCardsSaved = saved.some(result => result.status === 'not_saved') && !hasCards
+    const outcome = noCardsSaved ? undefined : extracted.outcome === 'no_english' || extracted.outcome === 'unreadable' ? extracted.outcome
+      : hasCards ? saved.some(result => result.status === 'not_saved' || result.status === 'skipped') ? 'partial' : 'saved'
+        : saved.some(result => result.status === 'skipped' && result.reason === 'already_owned') ? 'no_new_words' : 'no_reliable_words'
+    const resultJson = JSON.stringify({ results: saved, card_ids: cards.flatMap(card => card ? [card.id] : []), outcome })
+    const status = noCardsSaved ? 'failed' : 'completed'
     await fencedUpdate(env, jobId, lease, `UPDATE image_vocabulary_jobs SET results_json = ?, status = ?, stage = ?, error_code = ?,
       completed_at = ?, image_key = NULL, lease_token = NULL, lease_until = NULL, updated_at = ?
-      WHERE job_id = ? AND lease_token = ?`, [resultJson, status, status, allFailed ? 'NO_CARDS_SAVED' : null,
+      WHERE job_id = ? AND lease_token = ?`, [resultJson, status, status, noCardsSaved ? 'NO_CARDS_SAVED' : null,
       clock().toISOString(), clock().toISOString(), jobId, lease])
     if (job.image_key) await env.IMAGE_STORAGE.delete(job.image_key).catch(() => undefined)
   } catch (error) {
@@ -309,13 +336,17 @@ export async function imageJobStatus(
   const extraction = jobExtraction(job.recognized_json)
   let results: VocabularySaveResult[] | undefined
   let cards: unknown[] | undefined
+  let outcome: string | undefined
   if (job.results_json) {
-    const stored = JSON.parse(job.results_json) as { results: VocabularySaveResult[]; card_ids: string[] }
-    results = stored.results
+    const stored = JSON.parse(job.results_json) as { results: VocabularySaveResult[]; card_ids: string[]; outcome?: string }
+    outcome = stored.outcome
+    results = stored.results.map(result => result.status === 'ambiguous'
+      ? { headword: result.headword, status: 'skipped', reason: 'insufficient_context' } : result)
     cards = (await Promise.all(stored.card_ids.map(id => createRepositories(db).flashcards.find(job.user_id, id))))
       .filter(card => card !== null)
   }
   return { job_id: job.job_id, status: job.status, stage: job.stage, error_code: job.error_code ?? null,
+    ...(outcome ? { outcome } : {}),
     ...(extraction ? { suggestions: extraction.suggestions } : {}), ...(results ? { results } : {}), ...(cards ? { cards } : {}) }
 }
 

@@ -11,7 +11,7 @@ export default function Capture() {
    <span className="h-10 w-10" />
   </header>
   <main className="flex-1 overflow-y-auto px-5 pb-6 pt-4">
-   <p className="text-sm leading-relaxed text-text-secondary">拍下或上傳包含英文的圖片，檢查辨識出的單字，再選擇要儲存的單字卡。</p>
+   <p className="text-sm leading-relaxed text-text-secondary">拍下或上傳包含英文的圖片，AI 會自動選字並建立單字卡，讓你直接開始學習。</p>
    <ImageVocabularyCapture />
   </main>
   <BottomNav />

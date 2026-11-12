@@ -8,7 +8,7 @@ ReLai 是「哩來愛爾蘭」面向在愛爾蘭學英文的臺灣學習者所�
 - 單一 Cloudflare Worker 在相同來源提供靜態前端及 Hono API；API 路徑以 `/relaiapp/api/v1/*` 開頭。
 - 目前的 API 提供健康檢查、身分驗證、初始 CEFR-J 級別選擇／starter bootstrap，以及經驗證的 Cards、Reviews、Stats、Settings API。健康檢查只代表 Worker 可回應，不代表 D1 或產品功能已就緒。
 - Cloudflare D1 的使用者、工作階段、卡片、複習、統計與設定 repository 已接入對應 API。CEFR-J A1–B2 來源資料與 canonical vocabulary catalog 分開保存；遠端匯入與部署狀態須另行查核。前端使用這些 API，不以 fixture 作為失敗時的備援資料。
-- Gemini 圖片詞彙擷取使用已驗證的非同步工作佇列，D1 保存工作、配額、辨識結果與卡片結果，私有 R2 暫存上傳圖片；每位使用者每天最多接受 5 張圖片（愛爾蘭時區），每張最多辨識 10 個英文詞。新詞彙通過 strict JSON Schema 與 deterministic field validation 後立即發布；詞義不明時會提供使用者確認選項。staging Queue/R2 建置、遷移順序與 Gemini 不明結果的安全處理見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
+- Gemini 圖片詞彙擷取使用已驗證的非同步工作佇列，D1 保存工作、配額、辨識結果與卡片結果，私有 R2 暫存上傳圖片；每位使用者每天最多接受 5 張圖片（愛爾蘭時區），每張最多辨識 10 個英文詞。新詞彙通過 strict JSON Schema 與 deterministic field validation 後立即發布；語境不足的候選詞直接跳過，不要求人工確認。staging Queue/R2 建置、遷移順序與 Gemini 不明結果的安全處理見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
 
 ## 封閉測試帳號與登入
 

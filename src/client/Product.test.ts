@@ -145,7 +145,7 @@ describe('Phase 4 authenticated product UI', () => {
    input.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await click(button('辨識並建立單字卡'))
-  expect(container.textContent).toContain('She was curious about the old map.')
+  expect(container.textContent).toContain('已建立 2 張單字卡')
   const uploadCall = requests('/vocabulary/image-jobs', 'POST')[0][1]!
   expect(uploadCall.body).toBeInstanceOf(FormData)
   expect(new Headers(uploadCall.headers).has('Content-Type')).toBe(false)
@@ -189,18 +189,12 @@ describe('Phase 4 authenticated product UI', () => {
   expect(requests('/vocabulary/image-jobs/by-key/' + idempotencyKey)).toHaveLength(1)
   expect(requests('/vocabulary/image-jobs/latest')).toHaveLength(2)
  })
- it('lets the user resolve an ambiguous catalog sense', async () => {
+ it('reads a legacy ambiguous result as skipped without offering manual resolution', async () => {
   const sourceId = '00000000-0000-4000-8000-000000000099'
-  const cardId = '00000000-0000-4000-8000-000000000098'
   const ambiguous = { headword: 'bank', status: 'ambiguous', reason: 'ambiguous_sense',
    item: { headword: 'bank', part_of_speech: 'noun', semantic_sense: 'land beside water',
     source_context: 'They walked beside the bank.', confidence: 0.99 },
    options: [{ catalog_id: '00000000-0000-4000-8000-000000000097', semantic_sense: 'land beside a river' }] }
-  const card = { id: cardId, user_id: 'owner', source_item_id: sourceId, card_type: 'vocabulary',
-   front_content: 'bank', back_content: 'river edge', part_of_speech: 'noun', zh_tw_definition: '河岸',
-   english_example: 'They walked along the bank.', zh_tw_example_translation: '他們沿著河岸走。',
-   explanation: null, irish_usage: null, source: 'Gemini image extraction', is_favorite: false,
-   last_reviewed_at: null, next_review_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   const fallback = server.response
   server.response = (url, init) => {
    const path = new URL(url, 'https://example.test').pathname
@@ -208,12 +202,6 @@ describe('Phase 4 authenticated product UI', () => {
     quota: { limit: 5, used: 1, remaining: 4, resets_at: '2027-01-03T00:00:00.000Z' } }, { status: 202 })
    if (path.endsWith(`/vocabulary/image-jobs/${sourceId}`)) return Response.json({ job_id: sourceId, status: 'completed',
     stage: 'completed', error_code: null, suggestions: [ambiguous.item], results: [ambiguous], cards: [] })
-   if (path.endsWith('/vocabulary/save')) {
-    const items = JSON.parse(String(init?.body)).items as { semantic_sense: string }[]
-    return items[0].semantic_sense === 'land beside a river'
-     ? Response.json({ results: [{ headword: 'bank', status: 'saved', card_id: cardId }], cards: [card] })
-     : Response.json({ results: [ambiguous], cards: [] })
-   }
    return fallback(url, init)
   }
   await renderAt('capture')
@@ -224,11 +212,9 @@ describe('Phase 4 authenticated product UI', () => {
   })
   await click(button('辨識並建立單字卡'))
   expect(requests('/vocabulary/save', 'POST')).toHaveLength(0)
-  expect(container.textContent).toContain('無法安全判斷「bank」的詞義')
-  await click(button('使用「land beside a river」'))
-  expect(requests('/vocabulary/save', 'POST')).toHaveLength(1)
-  expect(container.textContent).toContain('已建立 1 張單字卡')
-  expect(container.querySelector(`a[href="/relaiapp/cards/${cardId}"]`)).toBeTruthy()
+  expect(container.textContent).toContain('1 個項目已跳過')
+  expect(container.textContent).not.toContain('需要確認')
+  expect([...container.querySelectorAll('button')].some(button => button.textContent?.includes('使用「'))).toBe(false)
  })
  it('keeps the answer off the card front and separates each back field', async () => {
   await renderAt('cards')

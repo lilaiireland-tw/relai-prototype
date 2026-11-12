@@ -731,7 +731,7 @@ usage_patterns TEXT NOT NULL DEFAULT '[]'
 
 This table and its admin API are retained for legacy review records. The normal
 image vocabulary flow does not create candidates or wait for administrator
-approval; ambiguous senses return catalog options for the user to resolve.
+approval; uncertain senses are skipped automatically without user confirmation.
 
 ## `user_vocabulary_items`
 
@@ -906,8 +906,8 @@ record reuses its canonical ID. Only missing fields are generated for incomplete
 records, and empty fields are filled without overwriting published content. New
 words and senses generate a definition, example and Traditional Chinese
 translation, then publish after strict schema and deterministic field checks.
-Uncertain sense matches return explicit catalog options for the user to choose;
-they are never merged by word spelling alone. Eligible words create user cards
+Uncertain sense matches are skipped automatically without user confirmation;
+senses are never merged by word spelling alone. Eligible words create user cards
 immediately, each referencing the canonical catalog ID and retaining its
 `source_item_id`; catalog provenance records the model and prompt. Per-word
 statuses allow a partial batch to succeed, and the response returns the created
@@ -1060,9 +1060,12 @@ Image submission validates authentication, image type/size, daily quota, and
 idempotency before it accepts the image and returns HTTP 202 with a stable
 `job_id`. The client polls D1-backed status and resumes it after refresh. Queue
 messages contain no image bytes. Completed status includes up to 10 suggestions,
-`saved` / `already_saved` / `ambiguous` / `not_saved` results, and persisted cards.
-Ambiguous sense selection is owner-authorized and does not repeat Gemini
-enrichment. `POST /vocabulary/image` returns 410 during this API transition.
+`saved` / `already_saved` / `skipped` / `not_saved` results, and persisted cards.
+Recognition contract v2 classifies English content, non-English content and
+unreadable images in one request, using the user's stored CEFR setting. Normal
+empty results are distinct from generation/persistence errors. Historical
+ambiguous records remain readable as skips; manual sense selection is disabled.
+`POST /vocabulary/image` returns 410 during this API transition.
 Daily over-quota requests return 429 with the limit, use, remaining count, and
 next Dublin reset time. Admin recovery only requeues jobs whose provider outcome
 is safe to resume.
@@ -1136,7 +1139,7 @@ source_item.failed
 ```
 
 For B5.4 image vocabulary, each word is its own atomic write unit. Eligible
-words are saved even when another word is ambiguous or invalid, and every item
+words are saved even when another word is skipped or invalid, and every item
 returns an individual status. The canonical update, version snapshot, user card
 and stats update for one word remain atomic. Other ingestion flows define their
 own transaction boundary.
@@ -1656,7 +1659,7 @@ Cloudflare URL 可正常載入
 
 ## Phase 5 — AI（進行中）
 
-- B5.4 圖片詞彙辨識與 sense-aware canonical catalog reuse/enrichment 已實作；新詞彙會通過 deterministic field validation 後立即發布並建立卡片，模糊詞義由使用者選擇既有詞義；staging migration 與操作驗證待依手冊進行
+- B5.4 圖片詞彙辨識與 sense-aware canonical catalog reuse/enrichment 已實作；新詞彙會通過 deterministic field validation 後立即發布並建立卡片，語境不足的詞義直接跳過，不要求使用者確認；staging migration 與操作驗證待依手冊進行
 - text ingestion、Error Log AI extraction、retry/latency 產品驗收尚未完成
 
 ## Phase 6 — PWA（尚未開始）

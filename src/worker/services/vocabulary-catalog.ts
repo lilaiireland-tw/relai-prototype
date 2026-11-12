@@ -26,14 +26,14 @@ export interface CatalogRecord {
 }
 
 export type VocabularyPlan = {
-  kind: 'ready' | 'ambiguous' | 'invalid'
+  kind: 'ready' | 'ambiguous' | 'skipped' | 'invalid'
   item: VocabularySuggestion
   normalized_key: string
   part_of_speech_key: string
   sense_key: string
   target_catalog_id: string | null
   content: Partial<LexicalContent>
-  reason: 'ambiguous_sense' | 'low_confidence' | 'invalid_content' | 'enrichment_unavailable' | 'catalog_changed' | 'catalog_conflict' | null
+  reason: 'ambiguous_sense' | 'low_confidence' | 'insufficient_context' | 'already_owned' | 'invalid_content' | 'enrichment_unavailable' | 'catalog_changed' | 'catalog_conflict' | null
   model: string
   prompt_version: string
   provenance: string
@@ -41,7 +41,7 @@ export type VocabularyPlan = {
   catalog?: CatalogRecord
   options?: { catalog_id: string; semantic_sense: string }[]
   validation_failure?: {
-    stage: 'catalog_generation'
+    stage: 'catalog_generation' | 'catalog_match'
     item_index: number
     code: 'unavailable' | 'response_schema' | 'item_schema' | 'duplicate_index' | 'missing_item' | 'unexpected_field' | 'missing_fields'
   }
@@ -64,7 +64,7 @@ export async function vocabularyContentHash(content: Partial<LexicalContent>) {
 
 const matchItemSchema = z.strictObject({
     item_index: z.number().int().min(0).max(9),
-    action: z.enum(['match', 'new', 'ambiguous']),
+    action: z.enum(['match', 'new', 'skip', 'ambiguous']),
     candidate_index: z.number().int().min(0).max(49).nullable(),
     confidence: z.number().min(0).max(1),
 })
@@ -86,7 +86,7 @@ const generatedResponseSchema = z.strictObject({
 
 const selectionJsonSchema = {
   type: 'object', additionalProperties: false, properties: { version: { type: 'integer' }, matches: { type: 'array', maxItems: 10, items: {
-    type: 'object', additionalProperties: false, properties: { item_index: { type: 'integer' }, action: { type: 'string', enum: ['match', 'new', 'ambiguous'] },
+    type: 'object', additionalProperties: false, properties: { item_index: { type: 'integer' }, action: { type: 'string', enum: ['match', 'new', 'skip'] },
       candidate_index: { type: ['integer', 'null'] }, confidence: { type: 'number' } },
     required: ['item_index', 'action', 'candidate_index', 'confidence'],
   } } }, required: ['version', 'matches'],
@@ -120,15 +120,21 @@ function provenance(item: VocabularySuggestion, model: string) {
     model, prompt_version: VOCABULARY_PROMPT_VERSION, field_validation: 'passed' })
 }
 
-async function readCatalog(db: PersistenceDatabase, item: VocabularySuggestion): Promise<CatalogRecord[]> {
-  const result = await db.prepare(`SELECT id, normalized_key, part_of_speech, part_of_speech_key, sense_key,
+async function readCatalog(db: PersistenceDatabase, items: VocabularySuggestion[]): Promise<CatalogRecord[][]> {
+  if (!items.length) return []
+  const query = `SELECT id, normalized_key, part_of_speech, part_of_speech_key, sense_key,
       semantic_sense, cefr_level, source_dataset, provenance, content_version, zh_tw_definition, english_example,
       zh_tw_example_translation, usage_patterns FROM vocabulary_catalog
     WHERE normalized_key = ? AND part_of_speech_key = ? AND publication_status = 'published'
-    ORDER BY id LIMIT 50`)
-    .bind(normalizeHeadword(item.headword), item.part_of_speech).all<Omit<CatalogRecord, 'usage_patterns'> & { usage_patterns: string | null }>()
+    ORDER BY id LIMIT 50`
+  // One bounded, indexed lookup per candidate inside a single database request.
+  const result = await db.prepare(items.map(() => `SELECT * FROM (${query})`).join(' UNION ALL '))
+    .bind(...items.flatMap(item => [normalizeHeadword(item.headword), item.part_of_speech]))
+    .all<Omit<CatalogRecord, 'usage_patterns'> & { usage_patterns: string | null }>()
   if (!result.success) throw new Error('Could not inspect vocabulary catalog.')
-  return result.results.map(row => ({ ...row, usage_patterns: parseUsagePatterns(row.usage_patterns) }))
+  const records = result.results.map(row => ({ ...row, usage_patterns: parseUsagePatterns(row.usage_patterns) }))
+  return items.map(item => records.filter(row => row.normalized_key === normalizeHeadword(item.headword) &&
+    row.part_of_speech_key === item.part_of_speech).filter((row, index, rows) => rows.findIndex(other => other.id === row.id) === index))
 }
 
 function semanticMatchPrompt(items: { itemIndex: number; item: VocabularySuggestion; candidates: CatalogRecord[] }[]) {
@@ -139,7 +145,7 @@ function semanticMatchPrompt(items: { itemIndex: number; item: VocabularySuggest
       definition: candidate.zh_tw_definition, example: candidate.english_example,
       translation: candidate.zh_tw_example_translation,
     })) }))
-  return `For each recognized word, compare its source meaning with the supplied published senses. Choose match only when the source context clearly expresses that same sense. Choose new only when it is clearly a different sense. Choose ambiguous when evidence is insufficient or candidates conflict. Do not create IDs or keys. Return contract version 1 and exactly one decision per item. Confidence must reflect semantic evidence, not spelling alone.\n${JSON.stringify(input)}`
+  return `For each recognized English word, use headword, part_of_speech, detected_sense and source_context to compare with the supplied published senses. Choose match only when the source context clearly expresses that same sense. Choose new only when it is clearly a different sense, never merge by spelling alone. Choose skip when context is insufficient or candidates conflict; never ask the learner to confirm. Do not create IDs or keys. Return contract version 1 and exactly one decision per item. Confidence alone does not establish correctness: the source context and catalog meaning must agree.\n${JSON.stringify(input)}`
 }
 
 export function generationPrompt(items: { item_index: number; item: VocabularySuggestion; missing: LexicalField[];
@@ -151,8 +157,9 @@ export async function prepareVocabulary(
   db: PersistenceDatabase, items: VocabularySuggestion[],
   env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string }, recognitionModel: string,
   request: VocabularyJsonRequester = requestVocabularyJson,
+  userId?: string,
 ): Promise<VocabularyPlan[]> {
-  const rows = await Promise.all(items.map(item => readCatalog(db, item)))
+  const rows = await readCatalog(db, items)
   const selected = new Map<number, CatalogRecord>()
   const needsMatch: { itemIndex: number; item: VocabularySuggestion; candidates: CatalogRecord[] }[] = []
   const plans: (VocabularyPlan | undefined)[] = Array(items.length)
@@ -162,11 +169,10 @@ export async function prepareVocabulary(
     const part_of_speech_key = item.part_of_speech
     const sense_key = normalizeSense(item.semantic_sense)
     const exact = rows[itemIndex].find(record => record.sense_key === sense_key)
-    if (item.confidence < MATCH_CONFIDENCE) {
-      plans[itemIndex] = { kind: 'ambiguous', item, normalized_key, part_of_speech_key, sense_key,
-        target_catalog_id: null, content: {}, reason: 'low_confidence', model: recognitionModel,
-        prompt_version: VOCABULARY_PROMPT_VERSION, provenance: '', content_hash: null,
-        options: rows[itemIndex].map(record => ({ catalog_id: record.id, semantic_sense: record.semantic_sense })) }
+    if (item.contextual_support === 'insufficient' || item.confidence < MATCH_CONFIDENCE) {
+      plans[itemIndex] = { kind: 'skipped', item, normalized_key, part_of_speech_key, sense_key,
+        target_catalog_id: null, content: {}, reason: 'insufficient_context', model: recognitionModel,
+        prompt_version: VOCABULARY_PROMPT_VERSION, provenance: '', content_hash: null }
     } else if (exact) {
       selected.set(itemIndex, exact)
     } else if (rows[itemIndex].length) {
@@ -204,19 +210,40 @@ export async function prepareVocabulary(
         const normalized_key = normalizeHeadword(item.headword)
         const part_of_speech_key = item.part_of_speech
         const sense_key = normalizeSense(item.semantic_sense)
-        plans[entry.itemIndex] = { kind: 'ambiguous', item, normalized_key, part_of_speech_key, sense_key,
-          target_catalog_id: null, content: {}, reason: 'ambiguous_sense', model: response?.model ?? recognitionModel,
-          prompt_version: VOCABULARY_PROMPT_VERSION, provenance: '', content_hash: null,
-          options: entry.candidates.map(candidate => ({ catalog_id: candidate.id, semantic_sense: candidate.semantic_sense })) }
+        const uncertain = decision && (decision.action === 'skip' || decision.action === 'ambiguous' || decision.confidence < MATCH_CONFIDENCE)
+        const validation_failure: VocabularyPlan['validation_failure'] = uncertain ? undefined : {
+          stage: 'catalog_match', item_index: entry.itemIndex,
+          code: !response ? 'unavailable' : !parsed ? 'response_schema' : !decision ? 'missing_item' : 'item_schema',
+        }
+        if (validation_failure) console.warn(JSON.stringify({ event: 'vocabulary_validation_failed', ...validation_failure }))
+        plans[entry.itemIndex] = { kind: uncertain ? 'skipped' : 'invalid', item, normalized_key, part_of_speech_key, sense_key,
+          target_catalog_id: null, content: {}, reason: uncertain ? 'insufficient_context' : 'invalid_content', model: response?.model ?? recognitionModel,
+          prompt_version: VOCABULARY_PROMPT_VERSION, provenance: '', content_hash: null, validation_failure }
       }
     }
   }
 
+  const catalogIds = [...new Set([...selected.values()].map(record => record.id))]
+  const owned = new Set<string>()
+  if (userId && catalogIds.length) {
+    const result = await db.prepare(`SELECT vocabulary_catalog_id FROM flashcards WHERE user_id = ?
+      AND vocabulary_catalog_id IN (${catalogIds.map(() => '?').join(', ')})`)
+      .bind(userId, ...catalogIds).all<{ vocabulary_catalog_id: string }>()
+    if (!result.success) throw new Error('Could not inspect owned vocabulary.')
+    for (const row of result.results) owned.add(row.vocabulary_catalog_id)
+  }
   const generationInputs: { item_index: number; item: VocabularySuggestion; missing: LexicalField[];
     existing: Partial<LexicalContent>; catalog: CatalogRecord | null }[] = []
   for (const [itemIndex, item] of items.entries()) {
     if (plans[itemIndex]) continue
     const catalog = selected.get(itemIndex) ?? null
+    if (catalog && owned.has(catalog.id)) {
+      plans[itemIndex] = { kind: 'skipped', item, normalized_key: normalizeHeadword(item.headword),
+        part_of_speech_key: item.part_of_speech, sense_key: catalog.sense_key, target_catalog_id: catalog.id,
+        content: {}, reason: 'already_owned', model: recognitionModel, prompt_version: VOCABULARY_PROMPT_VERSION,
+        provenance: '', content_hash: null, catalog }
+      continue
+    }
     const existing: Partial<LexicalContent> = catalog ? {
       zh_tw_definition: catalog.zh_tw_definition ?? undefined,
       english_example: catalog.english_example ?? undefined,
