@@ -77,7 +77,7 @@ Vitest／Node 測試保留單元、元件、API、持久化及部署設定檢查
 
 ## 交付與部署
 
-GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 Cloudflare Workers Builds 負責從 `develop` 自動部署，使用 `npm run build:staging:validated` 與 `npm run deploy:staging:built`；後者部署經驗證的 staging 建置並檢查健康狀態。儲存庫本身無法證明 Cloudflare Dashboard 的 Git 連線目前是否啟用，應在 Builds 與 Deployments 頁面查核。Production 仍由 `main` 採受保護的手動發布流程。遠端 D1 migration 需另外審查並由操作人員執行，不會由 CI 或 staging 部署指令自動套用。設定與安全規則見 [develop 部署手冊](docs/develop-deployment.md)。
+GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 Cloudflare Workers Builds 負責從 `develop` 自動部署，使用 `npm run build:staging:validated` 與 `npm run deploy:staging:auto`；後者部署經驗證的 staging 建置並檢查健康狀態。儲存庫本身無法證明 Cloudflare Dashboard 的 Git 連線目前是否啟用，應在 Builds 與 Deployments 頁面查核。Production 仍由 `main` 採受保護的手動發布流程。遠端 D1 migration 需另外審查並由操作人員執行，不會由 CI 或 staging 部署指令自動套用。設定與安全規則見 [develop 部署手冊](docs/develop-deployment.md)。
 
 ## 開發進度
 
@@ -105,6 +105,16 @@ Direct `wrangler`/`npx wrangler` commands bypass repository approval wrappers. R
 
 Remote operator scripts are not PR checks. They fail closed unless both `--approve-remote-cloudflare` and `RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT` are supplied, and still require separate, narrowly scoped Product Owner approval for each action. Staging approval never authorizes production. Do not set this opt-in for routine work. The staging schema verifier checks bounded schema metadata only; it does not count application rows or run `PRAGMA foreign_key_check`.
 
-The existing Cloudflare Workers Builds deploy command does not supply those opt-ins, so it fails closed. Do not add a permanent approval variable to Builds; an owner-approved deployment must provide both opt-ins only for that specific run.
+Issue #108 adds a separate `npm run deploy:staging:auto` framework for Cloudflare
+Workers Builds only. It is **disabled by default** in `staging-release.json`.
+After separate PO activation, the narrowly scoped standing policy in AGENTS.md
+permits only reviewed `develop` delivery to the existing staging Worker plus
+bounded health GETs. Builds connection/branch controls and dedicated token custody
+are the authorization boundary; environment checks are not authentication.
+Manual commands retain their per-action double opt-in. Never put the generic
+approval variable in Builds. The full migration-set digest must match the
+PO-confirmed schema baseline; any change holds release without remote queries or
+automatic migrations. See the [activation, hold and rollback runbook](docs/develop-deployment.md).
+Production and GitHub Actions deployment behavior remain unchanged.
 
 The incident review identifies the strongest repository suspects, but local evidence cannot attribute the 2026-11-02 quota event or identify the billed database. Historical Dashboard analytics require separate approval; no live queries are an acceptable substitute. See the [incident review](docs/d1-read-quota-incident-2026-11-02.md) for evidence and follow-ups.
