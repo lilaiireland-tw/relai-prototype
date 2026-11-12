@@ -87,7 +87,7 @@ GitHub Actions 只執行 PR 品質檢查。儲存庫核准的 staging 流程由 
 - 卡片、複習、統計與設定的 D1 repository 與 authenticated API：已完成；前端已整合篩選、收藏、內容編輯、確認刪除與明確完成複習，首頁／統計／設定使用真實資料。
 - CEFR-J A1–B2 schema：已加入儲存庫 migration；正式環境目錄匯入尚未執行。
 - CEFR-J 1.6 目錄：已提供本機匯入工具、少量測試 fixture 與官方來源下載流程；正式環境尚未匯入。來源與操作方式見 [CEFR-J 目錄匯入](docs/cefr-j-catalog-import.md)。
-- 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 保留所選級別，並為每種選擇加入相同的 20 張已審核 B1 範例卡；重試不重複建立。行為見 [starter API](docs/onboarding-starter-api.md)。
+- 初始級別選擇與 starter cards：前端在完成必要的密碼變更後，將尚未選擇級別的使用者導向 `/relaiapp/onboarding`，僅提供 A1/A2/B1/B2。API 按程式內固定 ID 從 D1 取得所選級別 20 筆完整詞彙，只建立字卡關聯；重試不重複建立。啟用前需另行核准並完成一次性 Catalog 校稿／補全，行為與匯入次序見 [starter API](docs/onboarding-starter-api.md)。
 - 圖片單字擷取：已改為 D1 持久化工作、Cloudflare Queue 與 staging 私有 R2；Worker 端 Gemini 最多辨識 10 個 headword、詞性、詞義與來源上下文。完整 canonical 條目直接共用，缺漏欄位才生成；新詞與新詞義通過 strict JSON Schema 與 deterministic field validation 後發布並建立單字卡。每日 5 次配額與 Idempotency-Key 在 D1 原子保護；前端會追蹤工作並在重新整理後恢復。API key 使用 `GEMINI_API_KEY` Worker secret，`GEMINI_MODEL` 預設 `gemini-3.8-flash`。未知 Gemini 外部結果不會盲目重試；操作方式見[圖片詞彙工作佇列](docs/image-vocabulary-jobs.md)。
 - 後續階段：PWA／離線支援。
 

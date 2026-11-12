@@ -1,3 +1,4 @@
+import { parseCsv } from '../../../scripts/catalog-corrections'
 import { readFileSync, readdirSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -5,16 +6,14 @@ import { createApp } from '../index'
 import { digestSessionToken, generateSessionToken } from '../auth/crypto'
 import { createRepositories } from '../persistence'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
-import { STARTER_BATCH_SIZE } from '../persistence/starter-pack'
+import { STARTER_BATCH_SIZE, STARTER_CATALOG_IDS, type EnglishLevel } from '../persistence/starter-pack'
 
 const fixture = JSON.parse(readFileSync('scripts/fixtures/cefr-j-1.6-small.json', 'utf8')) as {
   dataset: string; version: string; provenance: string
   rows: { headword: string; pos: string; CEFR: string }[]
 }
-const demoFixture = JSON.parse(readFileSync('data/ai-enrichment/b1-sample-20.json', 'utf8')) as {
-  id: string; headword: string; part_of_speech: string; cefr_level: string
-  zh_tw_definition: string; english_example: string; zh_tw_example_translation: string; irish_usage: string | null
-}[]
+const reviewFixture = parseCsv(readFileSync('docs/catalog-112/starter-review.csv', 'utf8'))
+const demoFixture = reviewFixture.filter(row => row.cefr_level === 'B1')
 const now = '2026-10-02T10:00:00.000Z'
 
 function sqliteD1(sqlite: DatabaseSync, starterBindings: number[]): PersistenceDatabase {
@@ -80,9 +79,9 @@ describe('initial CEFR-J onboarding API', () => {
        source_version, provenance, zh_tw_definition, english_example, zh_tw_example_translation,
        irish_usage, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    demoFixture.forEach(row => add.run(row.id, row.headword, row.headword.trim().toLowerCase(),
+    reviewFixture.forEach(row => add.run(row.id, row.headword, row.headword.trim().toLowerCase(),
       row.part_of_speech, row.cefr_level, fixture.dataset, fixture.version, fixture.provenance,
-      row.zh_tw_definition, row.english_example, row.zh_tw_example_translation, row.irish_usage, now, now))
+      row.zh_tw_definition, row.english_example, row.zh_tw_example_translation, null, now, now))
   }
   const addCatalog = (sqlite: DatabaseSync, id: string, headword: string, level: string, pos = 'noun') => {
     sqlite.prepare(`INSERT INTO vocabulary_catalog
@@ -189,7 +188,7 @@ describe('initial CEFR-J onboarding API', () => {
       .toEqual({ english_level: 'B1', starter_cards_created: 20, already_selected: false })
   })
 
-  it.each(['A1', 'A2', 'B1', 'B2'])('persists %s and materializes the identical reviewed demo IDs', async level => {
+  it.each(['A1', 'A2', 'B1', 'B2'])('persists %s and materializes only the selected level IDs', async level => {
     seedCatalog(sqlite)
     const cookie = await createSession(`user-${level}`)
     const response = await choose(level, cookie)
@@ -198,7 +197,7 @@ describe('initial CEFR-J onboarding API', () => {
     expect(sqlite.prepare('SELECT english_level FROM user_settings WHERE user_id = ?').get(`user-${level}`))
       .toEqual({ english_level: level })
     const cards = cardRows(sqlite, `user-${level}`)
-    expect(cards.map(card => card.vocabulary_catalog_id).sort()).toEqual(demoFixture.map(row => row.id).sort())
+    expect(cards.map(card => card.vocabulary_catalog_id).sort()).toEqual([...STARTER_CATALOG_IDS[level as EnglishLevel]].sort())
     expect(cards.every(card => typeof card.vocabulary_catalog_id === 'string' &&
       card.zh_tw_definition && String(card.back_content).includes(String(card.zh_tw_definition)) &&
       String(card.source).includes('1.6'))).toBe(true)
@@ -275,7 +274,7 @@ describe('initial CEFR-J onboarding API', () => {
       JOIN vocabulary_catalog AS catalog ON catalog.id = card.vocabulary_catalog_id
       WHERE card.user_id = 'owner'`).all() as { cefr_level: string }[]
     expect(['A1', 'B1']).toContain(selected.english_level)
-    expect(cards).toEqual([{ cefr_level: 'B1' }])
+    expect(cards).toEqual([{ cefr_level: selected.english_level }])
   })
 
   it('does not persist a level when the selected catalog is unavailable', async () => {
@@ -285,6 +284,43 @@ describe('initial CEFR-J onboarding API', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM user_settings').get()).toEqual({ count: 0 })
   })
 
+  it.each(['A1', 'A2', 'B1', 'B2'] as const)('rejects every incomplete or ineligible %s pack without writes', async level => {
+    seedCatalog(sqlite)
+    const cookie = await createSession('owner')
+    const id = STARTER_CATALOG_IDS[level][0]
+    for (const [column, invalid] of [
+      ['zh_tw_definition', ' '], ['english_example', null], ['zh_tw_example_translation', ''],
+      ['cefr_level', level === 'B1' ? 'A1' : 'B1'], ['publication_status', 'review_needed'],
+      ['part_of_speech', ''],
+    ] as const) {
+      const original = sqlite.prepare(`SELECT ${column} AS value FROM vocabulary_catalog WHERE id = ?`).get(id)!.value
+      sqlite.prepare(`UPDATE vocabulary_catalog SET ${column} = ?, owner_user_id = ? WHERE id = ?`)
+        .run(invalid, column === 'publication_status' ? 'owner' : null, id)
+      expect((await choose(level, cookie)).status).toBe(503)
+      expect(cardRows(sqlite, 'owner')).toHaveLength(0)
+      expect(await sessions.userSettings.find('owner')).toBeNull()
+      expect(await sessions.userStats.find('owner')).toBeNull()
+      sqlite.prepare(`UPDATE vocabulary_catalog SET ${column} = ?, owner_user_id = NULL WHERE id = ?`).run(original, id)
+    }
+    sqlite.prepare('DELETE FROM vocabulary_catalog WHERE id = ?').run(id)
+    expect((await choose(level, cookie)).status).toBe(503)
+    expect(await sessions.userSettings.find('owner')).toBeNull()
+  })
+
+  it('rechecks completeness inside the batch if the catalog changes after selection', async () => {
+    seedCatalog(sqlite)
+    const cookie = await createSession('owner')
+    const batch = db.batch!.bind(db)
+    db.batch = async statements => {
+      sqlite.prepare('UPDATE vocabulary_catalog SET english_example = NULL WHERE id = ?').run(STARTER_CATALOG_IDS.A1[0])
+      return batch(statements)
+    }
+    expect((await choose('A1', cookie)).status).toBe(500)
+    expect(cardRows(sqlite, 'owner')).toHaveLength(0)
+    expect(await sessions.userSettings.find('owner')).toBeNull()
+    expect(await sessions.userStats.find('owner')).toBeNull()
+  })
+
   it('reads reviewed canonical enrichment through the catalog link without copying it to ownership rows', async () => {
     seedCatalog(sqlite)
     const reviewed = demoFixture[0]
@@ -292,7 +328,7 @@ describe('initial CEFR-J onboarding API', () => {
       zh_tw_example_translation = ?, irish_usage = ? WHERE id = ?`)
       .run('test-existing-zh', 'test-existing-example', 'test-existing-translation', 'test-existing-usage', reviewed.id)
     const cookie = await createSession('owner')
-    expect((await choose('A2', cookie)).status).toBe(200)
+    expect((await choose('B1', cookie)).status).toBe(200)
     const card = cardRows(sqlite, 'owner').find(row => row.vocabulary_catalog_id === reviewed.id)!
     expect(card).toMatchObject({ front_content: reviewed.headword, part_of_speech: reviewed.part_of_speech,
       zh_tw_definition: 'test-existing-zh', vocabulary_catalog_id: reviewed.id })
