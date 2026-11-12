@@ -8,7 +8,7 @@ import { buildRecord, buildRecordPath, git } from './staging-build-record.mjs'
 import { stagingUrls, verifyStagingHealth } from './verify-staging-health.mjs'
 import { verifyStagingDeployEnvironment } from './verify-staging-build.mjs'
 
-// These checks detect mistakes; Builds connection, protected develop and token custody authorize delivery.
+// These checks detect mistakes; Builds branch controls, PO review policy and token custody authorize delivery.
 export function verifyAutoRelease(env, policy, current, recorded) {
   assert.equal(env.WORKERS_CI, '1', 'Automatic deployment requires Workers Builds')
   assert.equal(env.WORKERS_CI_BRANCH, 'develop', 'Only develop may deploy staging')

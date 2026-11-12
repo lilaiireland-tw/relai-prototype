@@ -179,8 +179,9 @@ Only after separate Product Owner activation, Cloudflare Workers Builds may hold
 standing authorization to publish reviewed `develop` merge commits to the existing
 `relai-prototype-staging` Worker and perform at most six GET requests to its
 `/relaiapp/api/v1/health` route. This narrow exception requires the protected
-GitHub repository/branch connection, previews disabled, dedicated least-privilege
-Builds token custody, and `staging-release.json` enabled with the PO-confirmed
+GitHub repository/branch connection (with the temporary #110 exception below),
+previews disabled, dedicated least-privilege Builds token custody, and
+`staging-release.json` enabled with the PO-confirmed
 complete migration digest. See `docs/develop-deployment.md` before activation.
 
 `WORKERS_CI` variables and build receipts detect mistakes; they do not authenticate
@@ -197,6 +198,17 @@ any remote migration, confirms staging readiness and approves the new full diges
 A matching digest records human confirmation; it does not query or prove live schema.
 Production remains manual. Do not enable, deploy, merge or edit the Dashboard as
 part of implementing #108.
+
+Issue #110 temporary exception: PO has deferred GitHub `develop` Branch Protection
+while PO is the only user with push access. Until protection is enabled, only PO
+may merge, after human PR review and passing `Repository quality checks` and
+`Playwright E2E` checks. Direct pushes and review/check bypass remain prohibited
+by policy, but are not technically prevented: unreviewed or failing commits could
+reach Builds. Branch obscurity is not a control, and a `develop` SHA does not prove
+PR review. Follow up by requiring PRs, human approval and both checks, and blocking
+direct pushes/bypass with Branch Protection. This exception does not activate CD,
+weaken `main`/Production protections, Cloudflare's `develop`-only branch control,
+disabled previews, token custody or any remote-resource restriction.
 
 ### Database Migrations
 
