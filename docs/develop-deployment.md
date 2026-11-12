@@ -1,185 +1,187 @@
-# Develop deployment — Issue #15
+# Develop deployment — Issue #108
 
-| Source | Environment | Worker | Binding | Database |
-|---|---|---|---|---|
-| `develop` | `staging` | `relai-prototype-staging` | `DB` | `relai-staging-db` |
+**Framework only: automatic delivery is disabled.** `staging-release.json` ships
+with `enabled: false` and no confirmed schema digest. This PR does not authorize
+activation, Dashboard changes, remote API calls or deployment. AC1 requires later
+Product Owner activation and on-site acceptance.
 
-Test app: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/>
+| Source | Worker | D1 | R2 |
+|---|---|---|---|
+| Protected `develop` | `relai-prototype-staging` | `relai-staging-db` (`41ead93a-40f6-4016-b49c-df00a18e86da`) | `relai-vocabulary-images-staging`, EU |
 
-Health: <https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/api/v1/health>
+Production (`main`, `relai-prototype`, `relai-prod-db`) remains manual and unchanged.
+GitHub Actions is only the PR quality gate. Cloudflare Workers Builds / Git
+integration is the **sole** staging automatic deployer; do not add Actions CD or
+create another Worker.
 
-## Deployment ownership
+## Authorization and limits
 
-**The repository-approved automated staging deployment owner is Cloudflare
-Workers Builds / Git integration.** Verify its live connection and build status
-in the Cloudflare Dashboard. GitHub Actions runs only the existing PR quality checks in
-`.github/workflows/ci.yml`. No Actions workflow deploys this environment, and no
-GitHub staging environment or deployment secrets are required.
+After separate PO activation, the AGENTS.md standing exception covers only Builds
+publishing reviewed `develop` merge commits to this existing staging Worker, with
+its reviewed existing bindings, followed by at most six GETs to
+`https://relai-prototype-staging.lilaiireland.workers.dev/relaiapp/api/v1/health`.
+It never permits D1 SQL, schema reads or migrations, Queue/R2 data/resource
+operations, other API paths, production, local Codex or arbitrary GitHub workflows.
+Manual deployment and health scripts still require explicit per-action PO approval
+and both existing operator opt-ins. Do not permanently set
+`RELAI_REMOTE_CLOUDFLARE_APPROVAL` in Builds or CI.
 
-Issue #95 added a fail-closed gate to every repository Wrangler operation and
-staging health request. A deployment stops before Wrangler starts unless the
-specific invocation has Product Owner authorization and both
-`--approve-remote-cloudflare` and
-`RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT`.
-The configured Cloudflare Builds command does not carry that opt-in, so it fails
-closed until the Product Owner explicitly authorizes a deployment and arranges
-both opt-ins for that build. Do not store the approval value as a permanent
-build variable or add it to routine CI.
+`WORKERS_CI` and the local validation receipt are **not authentication**. Cloudflare
+[documents that injected variables can be overridden](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables).
+The actual boundary is the reviewed Builds connection to the exact repository,
+Worker and protected branch, disabled previews, restricted Dashboard administration,
+and a dedicated deployment token that is never available to local Codex or PR CI.
+Repository guards cannot inspect Dashboard branch controls or prove token scopes
+without remote calls; they make no such claim.
 
-The repository supplies two commands for Cloudflare:
+Cloudflare's [default generated token](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token)
+has broad permissions. Before enabling, PO must review a dedicated Builds-only
+user token for the intended account with only the permissions necessary to publish
+this Worker with its existing D1/EU R2/Queue bindings. Do not grant D1 SQL/migration,
+R2 object access, route edits or production access as a convenience. Cloudflare may
+only offer account-level Workers Scripts edit rather than per-Worker token scope;
+**do not claim a per-Worker IAM guarantee**. If the available scope/role permits
+unacceptable production or resource operations, keep the gate disabled until PO
+accepts that platform limitation or provisions a sufficiently isolated account.
+Do not expand token permissions to make a failed build pass without PO review.
 
-- `npm run build:staging:validated`: lint, typecheck, tests, staging build and
-  generated staging binding verification.
-- `npm run deploy:staging:built`: recheck the generated config, Wrangler packaging
-  dry-run, deploy that build and verify live health. It does not rebuild or retarget
-  a production build.
+## Product Owner activation checklist
 
-Both use the locked local Wrangler. The config check rejects a production Worker,
-wrong/extra D1 bindings, disabled workers.dev, custom routes and an inherited
-`CLOUDFLARE_ENV`. It also requires enabled observability, logs and invocation logs
-in both the source staging environment and the generated config. The health check
-requires HTTPS on the stable staging workers.dev origin, HTTP 200, JSON content
-type and exactly `{"status":"ok"}` at `/relaiapp/api/v1/health`. It rejects redirects
-and retries up to six times with ten-second timeouts and five-second delays.
-Health checks runtime availability, not schema, auth, Gemini or product acceptance.
+These are future operator steps, not authorization for Codex to execute them.
 
-Persistent [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
-are enabled by `env.staging.observability` in `wrangler.jsonc`, including
-`logs.enabled` and `logs.invocation_logs`. The existing Vite build carries these
-settings into the flattened staging config; they take effect through the same
-Workers Builds deployment after merge to `develop`. Inspect the staging Worker's
-Logs in the Cloudflare Dashboard after deployment. Production observability is
-unchanged. This configuration adds no application logging, Logpush or external
-logging vendor. Never log passwords, session cookies/tokens, `AUTH_PEPPER`, secrets
-or sensitive user learning content.
+1. Inspect the existing staging Worker's Git integration and last failed build in
+   Dashboard. Confirm the intended account and existing Worker. If disconnected,
+   plan a one-time connection to that Worker; do not create a second staging Worker.
+2. Protect `develop` on GitHub: require PRs, human review, current passing
+   `Repository quality checks` and `Playwright E2E` checks before merge, and block
+   direct pushes/bypass. A Builds environment variable cannot prove a merge was
+   reviewed. Confirm untrusted feature/PR code cannot obtain the Builds token.
+3. Before any enabling merge, stop/disconnect automatic Builds triggers and cancel
+   queued/running builds. Keep delivery held while auditing settings and schema.
+4. Separately authorize any required staging migrations using the
+   [D1 runbook](d1-migrations.md); never auto-apply them. PO must confirm the entire
+   repository migration history is current in staging, including previously added
+   migrations, and confirm code/schema compatibility. No remote query is part of
+   auto delivery. No table scans are implied by this confirmation.
+5. Compute the complete local migration digest (names and contents, not a commit
+   diff) in a clean Linux checkout matching Builds (`core.autocrlf=false`) with
+   this credential-cleared, network-isolated command. The digest covers raw bytes;
+   a Windows checkout with converted line endings produces a different digest
+   and safely holds release. Do not copy that converted digest into the baseline.
 
-## Product Owner Dashboard settings
+   ```sh
+   node --import ./scripts/deny-remote-network.mjs --input-type=module -e "import { directoryDigest } from './scripts/staging-build-record.mjs'; console.log(directoryDigest('migrations'))"
+   ```
 
-Use these settings when auditing or reconnecting the existing staging Worker.
-Check the current Cloudflare build history for live connection status.
+   In a separately reviewed activation PR, set `staging-release.json` to
+   `{"enabled":true,"migrations":"<confirmed 64-character digest>"}`. PO approval
+   must explicitly adopt the scoped standing delivery policy. Merge only while
+   Builds is stopped. A digest is a recorded human assertion, not proof of live
+   schema. Schema drift outside repository migrations requires an immediate hold.
+6. Audit the following settings under **Workers & Pages → relai-prototype-staging
+   → Settings → Builds**. [Connect an existing Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker),
+   [branch controls](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/),
+   [build configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/).
 
-1. Sign in to the Cloudflare account containing `relai-staging-db`. Open
-   **Workers & Pages → relai-prototype-staging → Settings → Builds → Connect**.
-   Reuse the existing Worker. [Connecting an existing Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker).
-2. Select GitHub. As the repository owner or an authorized GitHub App administrator,
-   install/authorize **Cloudflare Workers and Pages** for
-   `lilaiireland-tw/relai-prototype`. Choose that repository in Cloudflare.
-   [GitHub access](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/#manage-access).
-3. Enter the settings below before saving the connection. In **Settings → Build(s)
-   → Branch control**, confirm the deployment branch is `develop` and uncheck
-   **Enable Preview Builds**. The field labelled **Production branch** means this
-   Worker's active deployment branch; it must be `develop` for the staging Worker.
-   [Branch controls](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/).
-
-| Dashboard setting | Required value |
+| Setting | Required value |
 |---|---|
-| Git repository | `lilaiireland-tw/relai-prototype` |
-| Git / Production branch | `develop` |
+| Worker | Existing `relai-prototype-staging` |
+| GitHub repository | `lilaiireland-tw/relai-prototype` |
+| Production/deployment branch | `develop` (this is the staging Worker's active branch) |
 | Preview builds | Disabled |
-| Root directory | Repository root (`/`) |
+| Root | `/` |
 | Build command | `npm run build:staging:validated` |
-| Deploy command | `npm run deploy:staging:built` |
-| Build variable `STAGING_URL` | `https://relai-prototype-staging.lilaiireland.workers.dev` |
-| Build variable `NODE_VERSION` | `24` |
+| Deploy command | `npm run deploy:staging:auto` |
+| `NODE_VERSION` | `24` |
+| `STAGING_URL` | `https://relai-prototype-staging.lilaiireland.workers.dev` |
+| `CLOUDFLARE_ACCOUNT_ID` | Intended staging account ID |
+| Authentication | Dedicated, reviewed Builds deployment API token selection |
+| `CLOUDFLARE_ENV` | Absent |
+| `RELAI_REMOTE_CLOUDFLARE_APPROVAL` | Absent |
 
-Do **not** set `CLOUDFLARE_ENV` in Cloudflare Builds variables or secrets. Remove
-any existing value before saving or retrying a build. `npm run build` invokes
-Vite in staging mode; `vite.config.ts` selects the named staging environment
-inside that build process and emits a flattened
-`dist/relai_prototype/wrangler.json` named `relai-prototype-staging`.
-`npm run deploy:staging:built` starts a separate Wrangler process against that
-generated config. If it inherits `CLOUDFLARE_ENV=staging`, Wrangler can target
-`relai-prototype-staging-staging`. The predeploy verifier fails before the dry run
-or deploy when the variable is present. Do not pass `--env staging` to a deploy
-of the flattened config.
+Do not manually override `WORKERS_CI`, `WORKERS_CI_BRANCH`,
+`WORKERS_CI_COMMIT_SHA` or `WORKERS_CI_BUILD_UUID`. These come from Builds. Ensure
+the selected deployment token is supplied as `CLOUDFLARE_API_TOKEN` to the deploy
+command; never print it or copy it into GitHub, local shells, source or chat.
+Runtime `AUTH_PEPPER` and `GEMINI_API_KEY` must already exist on the staging Worker;
+keep them out of build variables and the bundle. `secrets.required` is retained so
+missing runtime secrets cause deployment failure. No command creates secrets.
 
-4. Under **Build Variables and Secrets**, set only the two plain build variables
-   in the table. Use Cloudflare's Builds API-token selection for deployment
-   authentication. Keep credentials in Cloudflare; do not copy local OAuth tokens
-   into source or GitHub. [Build settings](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
-   [Node version selection](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/).
-5. Save or inspect the connection and inspect a build. Confirm its source is a
-   merged `develop` SHA, the Worker is `relai-prototype-staging`, and deployment
-   logs list only `DB` → `relai-staging-db`. Confirm its final health check passed
-   and open the test app URL. If connection starts a build before branch settings
-   are finalized, cancel it and retry only after `develop` and previews are correct.
+7. Only after PO approves all checks, reconnect/resume Builds and run the reviewed
+   current `develop` SHA. Inspect the build link/check run, commit SHA, Wrangler
+   target/bindings, version and health result. PO performs AC1 acceptance. Verify
+   feature and main pushes cannot trigger this Worker. Nothing here authorizes
+   production changes or product acceptance by Codex.
 
-No setup step targets `relai-prototype`, `relai-prod-db`, production routes or
-production promotion. Do not add a second Actions deployment workflow.
+## Local build and deployment behavior
 
-## Status and retries
+`build:staging:validated` first clears the previous validation receipt, then runs
+lint, typecheck, all tests, staging build, deployment config preparation and
+config verification. Each routine child clears credentials, isolates cached
+Wrangler state and blocks non-loopback Node access under #95. Only complete
+success records the checkout SHA, Builds UUID, artifact digest and complete
+migration digest in ignored `.wrangler/staging-validated.json`.
 
-Cloudflare build history exposes the source commit and build/deploy logs. Its
-GitHub check run links back to build details. Open the staging Worker's Builds
-history to inspect or retry a failed build, using the same reviewed settings.
-[GitHub build checks](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/github-integration/#check-run).
-Pushes to `develop` trigger Builds after connection; feature branches and `main`
-do not build this Worker while preview builds are disabled.
+`deploy:staging:auto` accepts no arguments. It requires Workers Builds on develop,
+the matching full checkout SHA, build UUID, clean tracked checkout, explicit
+account/token, exact staging URL, enabled release policy, confirmed migration
+digest and unchanged successful build receipt. It rejects Actions, inherited
+`CLOUDFLARE_ENV` and the generic operator approval variable. It rechecks the exact
+Worker/D1/EU R2, staging queues, no Cron/custom routes and required secret names,
+then consumes the receipt **before** the packaging dry run and deployment. It
+uses the locked local Wrangler against the flattened config with no `--env` flag,
+so it cannot append `-staging` again. No migration command runs.
 
-Deployment followed by failed health verification fails the command but does not
-roll back code. Inspect the staging Worker's Deployments tab and logs before
-retrying. Coordinate any manual recovery with Workers Builds to avoid overlapping
-deployments. Manual recovery is an operator action, not a second automated owner:
+The dispatcher has only dry-run, staging publish and bounded health steps. It
+never retries deployment. Successful publication logs the full SHA, Builds UUID
+and the account's staging Builds history URL; use the UUID to open the exact build
+and retain its permalink with release evidence. Wrangler logs include the deployed
+version. A health failure after publish fails the build but does not undo publish;
+the SHA/build link is logged before health so the failure remains traceable.
+Health requires HTTPS, no redirects, HTTP 200 and exactly `{"status":"ok"}` JSON,
+at most six attempts with ten-second timeouts and five-second delays. It checks no
+D1 schema, auth, Gemini or product behavior.
 
-```sh
-# From a clean, current develop checkout, with a local Cloudflare login:
-npm ci
-unset CLOUDFLARE_ENV
-npm run build:staging:validated
-RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT STAGING_URL=https://relai-prototype-staging.lilaiireland.workers.dev npm run deploy:staging:built -- --approve-remote-cloudflare
-```
+## Schema changes, failures and rollback
 
-For read-only health verification in PowerShell:
+- A migration added, removed, renamed or modified anywhere in the complete set
+  invalidates the confirmed digest, including migrations from earlier commits.
+  Automatic delivery stops before remote dispatch. Never update the digest merely
+  to satisfy CI: schema readiness requires PO confirmation and separately approved
+  migration work. For schema-changing PRs, first pause/cancel Builds, merge a hold
+  (`enabled: false`) and plan a compatible release with PO. After local migration
+  validation, separately authorized remote application and PO confirmation, use a
+  reviewed PR to update the digest and resume delivery. Also hold for schema drift
+  or compatibility changes not represented by a new migration.
+- CI/build failures never create a fresh receipt. Guard/config failures stop
+  before deployment. Packaging failure consumes the receipt and does not publish.
+  A second deploy invocation in the same build is rejected. A deliberate Dashboard
+  retry must rerun the full validated build to create a new receipt; it may publish
+  the same SHA again. No remote deduplication query or global exactly-once claim is
+  made. Cancel superseded/overlapping builds and confirm newest develop SHA before
+  retry; a stale in-flight build must not overwrite a later deployment.
+- To stop release immediately, PO disables/disconnects Builds and cancels pending
+  and running builds, then submits a hold PR (`enabled: false`). A hold commit
+  cannot cancel code already running in an older build. Revoke the dedicated token
+  if delivery authorization is withdrawn. Keep previews disabled throughout.
+- On bad code or failed post-publish health, stop Builds first and inspect its logs
+  and deployment history. Prefer a reviewed revert PR to protected develop followed
+  by validated delivery once PO confirms schema compatibility. An emergency
+  Dashboard rollback/manual recovery requires separate staging authorization; do
+  not merge, rollback, deploy or change resources as routine diagnosis. Worker
+  rollback does not roll back D1 data or schema. See
+  [Cloudflare rollback limits](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/).
 
-```powershell
-$env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
-$env:RELAI_REMOTE_CLOUDFLARE_APPROVAL = 'I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT'
-npm.cmd run verify:staging-health -- --approve-remote-cloudflare
-```
+Manual recovery remains `npm run build:staging:validated` followed by
+`npm run deploy:staging:built -- --approve-remote-cloudflare`, with the explicit
+per-run `RELAI_REMOTE_CLOUDFLARE_APPROVAL=I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT`
+and `STAGING_URL` set by the separately authorized operator. Unset
+`CLOUDFLARE_ENV`; never deploy the flattened config with `--env staging`. Coordinate
+with stopped Builds to avoid two deployers. `verify:staging-health` also retains
+both operator opt-ins. Local guard tests use mocks and no live Cloudflare resources.
 
-For manual recovery in PowerShell, remove the inherited variable before running
-the build and deploy commands:
-
-```powershell
-Remove-Item Env:CLOUDFLARE_ENV -ErrorAction SilentlyContinue
-npm.cmd run build:staging:validated
-$env:STAGING_URL = 'https://relai-prototype-staging.lilaiireland.workers.dev'
-$env:RELAI_REMOTE_CLOUDFLARE_APPROVAL = 'I_UNDERSTAND_REMOTE_CLOUDFLARE_COSTS_AND_IMPACT'
-npm.cmd run deploy:staging:built -- --approve-remote-cloudflare
-```
-
-Environment selection happens at [Vite build time](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/).
-Deploy `dist/relai_prototype/wrangler.json` after verifying it. Do not attempt to
-retarget a staging build with `--env production`. D1 migrations are separate
-operator actions.
-
-## Historical validation evidence
-
-- Staging safety and health tests cover wrong Worker/D1/route settings, invalid
-  health responses and exhausted retries; they need no remote credentials.
-- The original bootstrap remains valid: a separate checkout of latest
-  `origin/develop` at `536ba8d` deployed using Wrangler 4.142.0 and only
-  `DB` → `relai-staging-db` on 2026-09-28.
-- Bootstrap version: `a8fa280b-ef95-4f1f-839e-7eb295b2c648`. Live health returned
-  HTTP 200 with `{"status":"ok"}`; the app and its JavaScript asset returned HTTP
-  200 with the expected content types. This deployment is not undone.
-- Review revision removes the Actions deployer and its GitHub-specific output
-  hooks; CI remains unchanged. `npm run build:staging:validated` passed lint,
-  typecheck, 22 existing tests, four deployment tests, staging build and generated
-  binding verification. Explicit generated-config dry-run listed only
-  `DB` → `relai-staging-db`; the revised live health script passed.
-
-The evidence above records the original bootstrap and review-time checks. It does
-not establish current Dashboard connection or deployment status. Inspect the
-Cloudflare Builds and Deployments tabs for the current state.
-
-## Staging Worker name safety
-
-The unintended `relai-prototype-staging-staging` Worker created during Issue #50
-validation was manually removed by the Product Owner. The intended Worker remains
-`relai-prototype-staging`. The duplicate suffix resulted from passing
-`CLOUDFLARE_ENV=staging` to a separate Wrangler deploy process after Vite had
-already emitted a flattened staging config. Keep that variable unset for deploys
-of `dist/relai_prototype/wrangler.json`; `npm run verify:staging-build` rejects an
-inherited value and verifies the generated Worker name and D1 binding before
-either staging deploy command runs.
+Existing staging observability/logs/invocation logs remain enabled. Do not log
+passwords, session tokens/cookies, secrets or sensitive learning content. The
+previous unintended `relai-prototype-staging-staging` Worker was removed by PO;
+this change must never recreate it. Historical deployment evidence in prior Git
+revisions does not establish current Dashboard connection or schema readiness.

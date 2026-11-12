@@ -23,7 +23,7 @@ const env = {
 const vitest = resolve(root, 'node_modules/vitest/vitest.mjs')
 const playwright = resolve(root, 'node_modules/@playwright/test/cli.js')
 const commands = {
-  all: [[vitest, 'run'], ['--test', 'scripts/deployment.test.mjs', 'scripts/remote-safety.test.mjs', 'scripts/runtime-read-query-plan.test.mjs'], ['scripts/verify-d1-config.mjs']],
+  all: [[vitest, 'run'], ['--test', 'scripts/deployment.test.mjs', 'scripts/staging-auto.test.mjs', 'scripts/remote-safety.test.mjs', 'scripts/runtime-read-query-plan.test.mjs'], ['scripts/verify-d1-config.mjs']],
   d1Schema: [['--test', 'scripts/d1-schema.test.mjs', 'scripts/remote-safety.test.mjs']],
   routing: [[resolve(root, 'node_modules/vite/bin/vite.js'), 'build', '--mode', 'staging'], ['--test', 'scripts/routing.test.mjs']],
   e2e: [[playwright, 'test', ...process.argv.slice(3)]],

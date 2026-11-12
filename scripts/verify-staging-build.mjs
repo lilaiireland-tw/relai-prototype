@@ -37,10 +37,22 @@ export function verifyStagingDeployEnvironment(env) {
     'Unset CLOUDFLARE_ENV before deploying the flattened staging build; Wrangler can append a second -staging suffix')
 }
 
+export function verifyAutoStagingBindings(config, staging) {
+  verifyStagingBuild(config, staging)
+  assert.equal(config.d1_databases[0].database_id, '41ead93a-40f6-4016-b49c-df00a18e86da', 'Auto delivery must use the approved staging D1 ID')
+  assert.deepEqual(config.triggers?.crons, [], 'Auto delivery cannot enable Cron triggers')
+  assert.deepEqual(config.queues, staging.queues, 'Queue bindings must match reviewed staging configuration')
+  assert.deepEqual(config.queues?.producers, [{ binding: 'IMAGE_JOBS', queue: 'relai-vocab-image-jobs-staging' }])
+  assert.equal(config.queues?.consumers?.length, 1)
+  assert.equal(config.queues.consumers[0].queue, 'relai-vocab-image-jobs-staging')
+  assert.equal(config.queues.consumers[0].dead_letter_queue, 'relai-vocab-image-jobs-staging-dlq')
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   verifyStagingDeployEnvironment(process.env)
   const staging = readConfig({ config: 'wrangler.jsonc', env: 'staging' })
   const built = JSON.parse(await readFile('dist/relai_prototype/wrangler.json', 'utf8'))
   verifyStagingBuild(built, staging)
+  if (process.argv.includes('--auto')) verifyAutoStagingBindings(built, staging)
   log('Verified staging build: relai-prototype-staging -> DB -> relai-staging-db; workers.dev only; observability/logs/invocation logs enabled.')
 }

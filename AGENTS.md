@@ -172,6 +172,32 @@ Effective 2026-11-02, routine development, debugging, builds, tests and CI must 
 - Staging and production operations require separate, environment-specific Product Owner authorizations. A staging approval never authorizes production, or vice versa; authorize each remote action separately.
 - Do not apply migrations, deploy, access remote resources, or merge as part of P0 incident analysis or safety hardening.
 
+### Scoped staging delivery policy (Issue #108)
+
+This repository change does not activate deployment or authorize a remote action.
+Only after separate Product Owner activation, Cloudflare Workers Builds may hold
+standing authorization to publish reviewed `develop` merge commits to the existing
+`relai-prototype-staging` Worker and perform at most six GET requests to its
+`/relaiapp/api/v1/health` route. This narrow exception requires the protected
+GitHub repository/branch connection, previews disabled, dedicated least-privilege
+Builds token custody, and `staging-release.json` enabled with the PO-confirmed
+complete migration digest. See `docs/develop-deployment.md` before activation.
+
+`WORKERS_CI` variables and build receipts detect mistakes; they do not authenticate
+Builds or prove token scope. Never supply Builds credentials to local Codex, PR CI
+or arbitrary workflows. No standing authorization covers those actors, Production,
+D1 SQL/migrations/schema reads, Queue/R2 data or resource operations, or other API
+paths. Attaching the existing reviewed staging bindings during Worker publication
+is the only resource-binding change in scope. Manual operator scripts retain
+both opt-ins and separate per-action PO authorization. Never store the generic
+`RELAI_REMOTE_CLOUDFLARE_APPROVAL` in Builds.
+
+New/changed migrations hold automatic delivery until the PO separately authorizes
+any remote migration, confirms staging readiness and approves the new full digest.
+A matching digest records human confirmation; it does not query or prove live schema.
+Production remains manual. Do not enable, deploy, merge or edit the Dashboard as
+part of implementing #108.
+
 ### Database Migrations
 
 - Use repository-root `migrations/` as the schema source of truth.
