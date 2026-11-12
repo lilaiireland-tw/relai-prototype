@@ -14,7 +14,7 @@ type StarterResult =
 
 interface SettingsLevel { english_level: EnglishLevel | null }
 interface CatalogIdentity { id: string }
-// Offline reviewed selection: relai-112-2026-11-12, frozen after quality screening.
+// Offline reviewed selection: A1/A2/B2 seeded; B1 revised curated, seeded order. Frozen after quality review.
 export const STARTER_CATALOG_IDS: Record<EnglishLevel, readonly string[]> = {
   A1: [
     'cefr-j-3ee57dd1386a720a5dd7f7d6e2b594cf7af1d8177e33771ed8b75a0ed407ac59', // shoe (noun)
@@ -61,26 +61,26 @@ export const STARTER_CATALOG_IDS: Record<EnglishLevel, readonly string[]> = {
     'cefr-j-91804679753a250c3192b88068c23c7b556e5f1de8c2fcff9692ca9c7fd196b4', // dislike (noun)
   ],
   B1: [
-    'cefr-j-dfceb22e8e1fda62376a88fee1dfd8b2604b69a84b30ef2d8764f1170f73a730', // academy (noun)
-    'cefr-j-d42b2476a858afd54cdc5ad22918c1ab6c06ac477235767e42dbd833d15b06e3', // absorb (verb)
-    'cefr-j-2b457df7c93e8c57b865bfb37c0b6034abfe1177870dc1cca633842463824797', // abandon (verb)
-    'cefr-j-c31796bc6e5ae3cbf6c51f81396f96c85ed67bfc3c576c6f58e617e4e8691c20', // absent (adjective)
-    'cefr-j-395c607cac2cdd824f5c3bd686fcf574b9a4405c4bee33c7583232b11b9b2221', // aboard (adverb)
-    'cefr-j-4b130ae7c604c80184634dee4c3ea3808d58042a548c7ace6247f39540862e64', // abstract (adjective)
-    'cefr-j-1f6c73ab80d7891882ecfa8838127b0ecdc95d8b13b5386c3bd6977b5b0c3e9a', // access (noun)
-    'cefr-j-3b2aeb6ae24efc8b8b7970e2035335513f89cea647b0d749b985cf9ccebc19bd', // acceptance (noun)
-    'cefr-j-948ed8080a9c641090c2f17da73cb9040b5bad5e9f60e1b7262e0120bf7dd01a', // abundant (adjective)
-    'cefr-j-a5b404b067ef90abdb371db11536aa98c8f6dfb3cf3c1da86ad4cc3104c5f498', // accent (noun)
-    'cefr-j-7bad62bf11e05fa1ae94fe576ff40ef7d0f24a917f96b6bb1d1875641d694238', // aborigine (noun)
-    'cefr-j-517570934d8d57e89f8bc6c79c6029f177b429bba75fc9c0b3420926c473d098', // abnormal (adjective)
-    'cefr-j-1c3bf39bb9f3c5819ca0b325ceed42b49c8d36dbd23d91c64d28e5a314d6b5de', // accessible (adjective)
-    'cefr-j-1824acccfa941b57d28c507a27babad4290e79de8bc7dfb44bd7c6c875c0357e', // abundance (noun)
-    'cefr-j-9858b1bfa52455b86b0a3c6b1ae05a8cb4677f1594ec1191734985034ada6bcd', // able (adjective)
-    'cefr-j-be25ead38520cb4d2e3ecdc6610636bc11ec8e9c6e90198d0dd2bb69eec206d5', // absolutely (adverb)
-    'cefr-j-8c7983d2d5354901e0a9bc8eb6f887bd838d212d4102afc37e4e590b92a9eedc', // absolute (adjective)
-    'cefr-j-afc7a18efcc7a64e79fcbf689323023ff5ff5816f4702daf7db12ff6a7c6c581', // above (adjective)
-    'cefr-j-6c7117313075189b9a9a84840efeb2482ce3a1fcb28c0ff45d898b882b7578c6', // absence (noun)
+    'cefr-j-88e3d7ff0df6947e4a3637a6264ed1d8fa33b8ab7354977c5a146ddc54d63187', // protest (noun)
+    'cefr-j-43f66a1a6091b16f98b93025b6fd8c19fe10eb56fe29b0aa1f5a25ac8b59d9a9', // visa (noun)
+    'cefr-j-7c8686e52c7505c981c2b03f0ae247d84dfcee81d90e8e5ea2cb5ef17619dcb6', // former (adjective)
+    'cefr-j-634d4d269fa9e7b4fb89350266bb702cd0bd0c91f9e990809f9fc794a14efc3b', // widespread (adjective)
+    'cefr-j-237b1322fecc9c4fbc5206d74adc723ec3898777b2cc26a0f00105f9fa12f526', // practical (adjective)
+    'cefr-j-7bbb2a84e16bf4d643470a66fe059cf921f0303a78e06e177c22d4f193fea5e0', // service (noun)
+    'cefr-j-9211a6cc98a68ca972b85c412994b8f1c4d93108033a55d8a561ff35ac2ec3a0', // immediately (adverb)
+    'cefr-j-a6299144ee76d63bf0f88525582ff49c7d6f6b761ead68f48957023f2e151b1f', // shout (verb)
+    'cefr-j-40fbc3f3bd7465d0fc4858129ced87c633dd0918d64b89cfc1f42db15ccc1b26', // document (noun)
     'cefr-j-ec68181e00cce3b0efca69e22c32ae94d75f5f357c1127a13b49afddfa3ed605', // academic (adjective)
+    'cefr-j-a5b404b067ef90abdb371db11536aa98c8f6dfb3cf3c1da86ad4cc3104c5f498', // accent (noun)
+    'cefr-j-1c3bf39bb9f3c5819ca0b325ceed42b49c8d36dbd23d91c64d28e5a314d6b5de', // accessible (adjective)
+    'cefr-j-1cb2a63f5fe97d1c40869d0c99c74388f261974295114ca604900883a1b1e36e', // reduce (verb)
+    'cefr-j-497b81ed700832eed0f1a539eaaff1162c9ee6a6f4926a3ffc297bf67297c928', // interview (verb)
+    'cefr-j-5e9e78afd43d0529882f6b8980d5a2162df7b8bc54bddcb62752c829f0b07f4d', // locate (verb)
+    'cefr-j-2b457df7c93e8c57b865bfb37c0b6034abfe1177870dc1cca633842463824797', // abandon (verb)
+    'cefr-j-d42b2476a858afd54cdc5ad22918c1ab6c06ac477235767e42dbd833d15b06e3', // absorb (verb)
+    'cefr-j-1f6c73ab80d7891882ecfa8838127b0ecdc95d8b13b5386c3bd6977b5b0c3e9a', // access (noun)
+    'cefr-j-ecdaeb028d2efc9597e0b0b759e3731e802642df7129a1648e74f676d2bc4479', // respect (verb)
+    'cefr-j-f574277a1096ead2ef382cbc2b56d95b5e4ea9cf95095a5161d5c8f9d899dba9', // teamwork (noun)
   ],
   B2: [
     'cefr-j-a2c2db3184db402153363d0d145d6e12f95b174f627769f207d464e5bc417593', // misunderstand (verb)

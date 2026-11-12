@@ -49,6 +49,18 @@ function sqliteD1(sqlite: DatabaseSync, starterBindings: number[]): PersistenceD
 }
 
 describe('initial CEFR-J onboarding API', () => {
+
+  it('uses a B1 starter list spanning all four alphabet bands', () => {
+    const words = reviewFixture.filter(row => row.cefr_level === 'B1')
+      .map(row => row.headword.toLowerCase())
+    expect(words).toHaveLength(20)
+    expect(words).not.toContain('aborigine')
+    expect(words.filter(word => word.startsWith('a')).length).toBeLessThan(10)
+    for (const [low, high] of [['a', 'f'], ['g', 'l'], ['m', 'r'], ['s', 'z']]) {
+      expect(words.some(word => word[0] >= low && word[0] <= high)).toBe(true)
+    }
+  })
+
   let sqlite: DatabaseSync
   let db: PersistenceDatabase
   let app: ReturnType<typeof createApp>
