@@ -1,13 +1,16 @@
-# Develop deployment — Issue #108
+# Develop deployment — Issues #108 / #110
 
-**Framework only: automatic delivery is disabled.** `staging-release.json` ships
-with `enabled: false` and no confirmed schema digest. This PR does not authorize
-activation, Dashboard changes, remote API calls or deployment. AC1 requires later
-Product Owner activation and on-site acceptance.
+**Repository release gate enabled by PO decision.** `staging-release.json` has
+`enabled: true` and the Linux-computed migration digest recorded below. PO has
+reported verification complete. Cloudflare Dashboard configuration, deployment
+token permissions and the first remote deployment still require PO acceptance;
+the repository setting does not prove that automatic delivery is operational.
+This document does not authorize Codex to change Dashboard settings, make remote
+API calls or deploy.
 
 | Source | Worker | D1 | R2 |
 |---|---|---|---|
-| Protected `develop` | `relai-prototype-staging` | `relai-staging-db` (`41ead93a-40f6-4016-b49c-df00a18e86da`) | `relai-vocabulary-images-staging`, EU |
+| PO-reviewed `develop` (protection temporarily deferred; see below) | `relai-prototype-staging` | `relai-staging-db` (`41ead93a-40f6-4016-b49c-df00a18e86da`) | `relai-vocabulary-images-staging`, EU |
 
 Production (`main`, `relai-prototype`, `relai-prod-db`) remains manual and unchanged.
 GitHub Actions is only the PR quality gate. Cloudflare Workers Builds / Git
@@ -29,13 +32,28 @@ and both existing operator opt-ins. Do not permanently set
 `WORKERS_CI` and the local validation receipt are **not authentication**. Cloudflare
 [documents that injected variables can be overridden](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables).
 The actual boundary is the reviewed Builds connection to the exact repository,
-Worker and protected branch, disabled previews, restricted Dashboard administration,
+Worker and `develop` branch control, disabled previews, restricted Dashboard administration,
 and a dedicated deployment token that is never available to local Codex or PR CI.
 Repository guards cannot inspect Dashboard branch controls or prove token scopes
 without remote calls; they make no such claim.
 
+### Temporary develop protection exception (#110)
+
+PO explicitly deferred GitHub `develop` Branch Protection while only PO has push
+access. Only PO may merge, after human PR review and current passing
+`Repository quality checks` and `Playwright E2E` checks. Direct pushes and bypass
+are prohibited by policy but remain technically possible. This accepted temporary
+risk means unreviewed or failing code could reach Builds; branch obscurity and a
+`develop` SHA do not establish review. Builds cannot verify GitHub PR approval or
+required-check enforcement; its own validated build must still pass.
+
+Follow-up: enable required PRs, human approval and both checks, blocking direct
+pushes/bypass with Branch Protection. This exception changes no `main`/Production
+protection, Cloudflare branch control, disabled previews, token custody, schema
+hold or remote-resource authorization. It does not authorize activation.
+
 Cloudflare's [default generated token](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token)
-has broad permissions. Before enabling, PO must review a dedicated Builds-only
+has broad permissions. Before enabling delivery, PO must review a dedicated Builds-only
 user token for the intended account with only the permissions necessary to publish
 this Worker with its existing D1/EU R2/Queue bindings. Do not grant D1 SQL/migration,
 R2 object access, route edits or production access as a convenience. Cloudflare may
@@ -52,10 +70,10 @@ These are future operator steps, not authorization for Codex to execute them.
 1. Inspect the existing staging Worker's Git integration and last failed build in
    Dashboard. Confirm the intended account and existing Worker. If disconnected,
    plan a one-time connection to that Worker; do not create a second staging Worker.
-2. Protect `develop` on GitHub: require PRs, human review, current passing
-   `Repository quality checks` and `Playwright E2E` checks before merge, and block
-   direct pushes/bypass. A Builds environment variable cannot prove a merge was
-   reviewed. Confirm untrusted feature/PR code cannot obtain the Builds token.
+2. Apply the temporary #110 exception above: only PO merges reviewed PRs after
+   both named checks pass. Record that Branch Protection is deferred and track
+   enabling it as follow-up. A Builds environment variable cannot prove review.
+   Confirm untrusted feature/PR code cannot obtain the Builds token.
 3. Before any enabling merge, stop/disconnect automatic Builds triggers and cancel
    queued/running builds. Keep delivery held while auditing settings and schema.
 4. Separately authorize any required staging migrations using the
@@ -63,6 +81,13 @@ These are future operator steps, not authorization for Codex to execute them.
    repository migration history is current in staging, including previously added
    migrations, and confirm code/schema compatibility. No remote query is part of
    auto delivery. No table scans are implied by this confirmation.
+   For #110, PO reported verification complete and decided to enable the repository
+   release gate with the recorded digest. PO owns the verification evidence:
+   migration list with no pending migrations, schema-verifier exit 0 and complete
+   JSON/history matching all eight SQL filenames (0001–0008) at the reviewed commit.
+   Dashboard/environment and token-scope acceptance below remain required; a digest
+   alone cannot establish readiness. Codex must not rerun remote verification
+   without separate authorization.
 5. Compute the complete local migration digest (names and contents, not a commit
    diff) in a clean Linux checkout matching Builds (`core.autocrlf=false`) with
    this credential-cleared, network-isolated command. The digest covers raw bytes;
@@ -73,11 +98,11 @@ These are future operator steps, not authorization for Codex to execute them.
    node --import ./scripts/deny-remote-network.mjs --input-type=module -e "import { directoryDigest } from './scripts/staging-build-record.mjs'; console.log(directoryDigest('migrations'))"
    ```
 
-   In a separately reviewed activation PR, set `staging-release.json` to
-   `{"enabled":true,"migrations":"<confirmed 64-character digest>"}`. PO approval
-   must explicitly adopt the scoped standing delivery policy. Merge only while
-   Builds is stopped. A digest is a recorded human assertion, not proof of live
-   schema. Schema drift outside repository migrations requires an immediate hold.
+   PR #111 records PO's decision with `enabled: true` and the 64-character digest
+   listed below in `staging-release.json`. PO approval must explicitly adopt the
+   scoped standing delivery policy. Merge only while Builds is stopped. A digest
+   is a recorded human assertion, not proof of live schema. Schema drift outside
+   repository migrations requires an immediate hold.
 6. Audit the following settings under **Workers & Pages → relai-prototype-staging
    → Settings → Builds**. [Connect an existing Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker),
    [branch controls](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/),
@@ -109,9 +134,47 @@ missing runtime secrets cause deployment failure. No command creates secrets.
 
 7. Only after PO approves all checks, reconnect/resume Builds and run the reviewed
    current `develop` SHA. Inspect the build link/check run, commit SHA, Wrangler
-   target/bindings, version and health result. PO performs AC1 acceptance. Verify
+   target/bindings, version and health result. PO performs on-site acceptance. Verify
    feature and main pushes cannot trigger this Worker. Nothing here authorizes
    production changes or product acceptance by Codex.
+
+   Record the full deployed SHA, exact Build/Deploy links, version, health result
+   and manual test-account smoke results (login, cards and image workflow); health
+   alone does not validate D1/Gemini/Queue. Then confirm a reviewed PR without
+   migrations automatically delivers after merge, while `main`/feature branches
+   cannot publish staging. These #110 acceptance results remain pending PO action.
+
+## Offline migration digest evidence (#110)
+
+On 2026-11-12, Linux Node `v24.13.1` (`process.platform === 'linux'`) under
+Docker Desktop WSL computed the complete `directoryDigest('migrations')`:
+
+- Source commit: `8582ccb12b2fd4174f86970d3489ba6cb3931516` (develop / PR #109).
+- SHA-256: `aa87c0786f6889d7abeaa34dfd848847677667c3c5a7cc761bf5799aba3d3607`.
+- Fresh detached checkout created with Git `core.autocrlf=false` in Windows
+  temporary storage, then accessed through the Linux mount; tracked status was
+  clean before computation. All nine files were separately compared byte-for-byte
+  with `git show <commit>:migrations/<filename>` and matched. All eight SQL files
+  have LF endings; README retains its committed mixed endings. Do not normalize
+  that file: the digest covers the entire directory, including README.
+- The existing network/credential isolation preload was used. Codex made no remote
+  Cloudflare requests or schema checks. This digest is evidence of repository
+  bytes only; PO subsequently set it in `staging-release.json` with `enabled: true`.
+
+To reproduce in a fresh Linux checkout with Git and Node 24 installed:
+
+```sh
+git clone --config core.autocrlf=false <repository-url-or-local-path> relai-digest
+cd relai-digest
+git checkout --detach 8582ccb12b2fd4174f86970d3489ba6cb3931516
+git status --porcelain
+git ls-files --eol migrations
+node --import ./scripts/deny-remote-network.mjs --input-type=module -e "import { directoryDigest } from './scripts/staging-build-record.mjs'; console.log(process.platform, process.version); console.log(directoryDigest('migrations'))"
+```
+
+Use the reviewed commit for release confirmation and recompute if any directory
+entry changes. A converted Windows checkout or archive may produce a different
+digest; never adopt that result to bypass the hold.
 
 ## Local build and deployment behavior
 
@@ -165,7 +228,7 @@ D1 schema, auth, Gemini or product behavior.
   cannot cancel code already running in an older build. Revoke the dedicated token
   if delivery authorization is withdrawn. Keep previews disabled throughout.
 - On bad code or failed post-publish health, stop Builds first and inspect its logs
-  and deployment history. Prefer a reviewed revert PR to protected develop followed
+  and deployment history. Prefer a PO-reviewed revert PR to develop followed
   by validated delivery once PO confirms schema compatibility. An emergency
   Dashboard rollback/manual recovery requires separate staging authorization; do
   not merge, rollback, deploy or change resources as routine diagnosis. Worker
