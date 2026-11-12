@@ -65,6 +65,10 @@ function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
 }
 
 function modelOutput(value: unknown) {
+  if (typeof value === 'object' && value !== null && 'version' in value && value.version === 1 &&
+    'suggestions' in value && Array.isArray(value.suggestions)) {
+    value = { version: 2, outcome: 'english', suggestions: value.suggestions.map(item => ({ contextual_support: 'clear', ...item })) }
+  }
   return Response.json({ status: 'completed', steps: [{ type: 'model_output',
     content: [{ type: 'text', text: JSON.stringify(value) }] }] })
 }
@@ -438,35 +442,29 @@ describe('authenticated canonical image vocabulary', () => {
     expect(gemini).toHaveBeenCalledTimes(2)
   })
 
-  it('returns ambiguous senses for user resolution without blocking eligible words', async () => {
+  it('skips uncertain senses without blocking eligible words and rejects manual resolution', async () => {
     const ownerCookie = await session('owner')
     const bank: VocabularySuggestion = { ...suggestion, headword: 'bank', part_of_speech: 'noun',
       semantic_sense: 'a place beside a river', source_context: 'They sat on the bank beside the river.' }
     const other: VocabularySuggestion = { ...bank, headword: 'curious', part_of_speech: 'adjective',
       semantic_sense: 'eager to know or learn', source_context: suggestion.source_context }
     const sourceId = await sourceItem('owner', [bank, other])
-    const financialId = addCatalog({ ...bank, semantic_sense: 'financial institution' }, completeContent, 'bank-financial')
-    const riverId = addCatalog({ ...bank, semantic_sense: 'land beside a river' }, completeContent, 'bank-river')
+    addCatalog({ ...bank, semantic_sense: 'financial institution' }, completeContent, 'bank-financial')
+    addCatalog({ ...bank, semantic_sense: 'land beside a river' }, completeContent, 'bank-river')
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(modelOutput({ version: 1, matches: [{ item_index: 0, action: 'ambiguous', candidate_index: null, confidence: 0.55 }] }))
       .mockResolvedValueOnce(modelOutput({ version: 1, items: [{ item_index: 1, ...completeContent }] })))
     await completeSource('owner', sourceId, [bank, other])
     const first = await save(ownerCookie, sourceId, [selection(bank), selection(other)])
     const result = await first.json() as { results: { status: string; options?: { catalog_id: string; semantic_sense: string }[] }[]; cards: { id: string }[] }
-    expect(result.results.map(item => item.status)).toEqual(['ambiguous', 'saved'])
-    expect(result.results[0].options).toEqual([
-      { catalog_id: financialId, semantic_sense: 'financial institution' },
-      { catalog_id: riverId, semantic_sense: 'land beside a river' },
-    ])
+    expect(result.results.map(item => item.status)).toEqual(['skipped', 'saved'])
+    expect(result.results[0]).toEqual({ headword: 'bank', status: 'skipped', reason: 'insufficient_context' })
     expect(result.cards).toHaveLength(1)
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM vocabulary_catalog_candidates').get()).toEqual({ count: 0 })
 
-    const chosen = result.results[0].options![1]
-    const resolved = await save(ownerCookie, sourceId, [{ ...selection(bank), semantic_sense: chosen.semantic_sense, resolve_sense: true }])
-    const resolvedResult = await resolved.json() as { results: { status: string; card_id: string }[]; cards: { id: string }[] }
-    expect(resolvedResult.results[0]).toMatchObject({ status: 'saved', card_id: resolvedResult.cards[0].id })
-    expect(sqlite.prepare('SELECT vocabulary_catalog_id FROM flashcards WHERE id = ?').get(resolvedResult.results[0].card_id))
-      .toEqual({ vocabulary_catalog_id: riverId })
+    const resolved = await save(ownerCookie, sourceId, [{ ...selection(bank), semantic_sense: 'land beside a river', resolve_sense: true }])
+    expect(resolved.status).toBe(410)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards WHERE user_id = ?').get('owner')).toEqual({ count: 1 })
   })
 
   it('saves valid words when one generated item fails deterministic field validation', async () => {

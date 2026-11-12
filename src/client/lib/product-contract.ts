@@ -28,6 +28,7 @@ export const reviewResponse = z.object({ completed: z.literal(true), already_com
 const vocabularySuggestionSchema = z.strictObject({
  headword: z.string().min(1), part_of_speech: z.string().min(1), semantic_sense: z.string().min(1),
  source_context: z.string().min(1), confidence: z.number().min(0).max(1),
+ contextual_support: z.enum(['clear', 'insufficient']).optional(),
 })
 export const vocabularyImageResponse = z.strictObject({
  contract_version: z.literal(1), source_item_id: z.string().uuid(), suggestions: z.array(vocabularySuggestionSchema).max(10),
@@ -42,6 +43,7 @@ export const vocabularySaveResponse = z.strictObject({
   z.strictObject({ headword: z.string(), status: z.literal('ambiguous'), reason: ambiguousSenseReason,
    item: vocabularySuggestionSchema, options: z.array(vocabularyOption) }),
   z.strictObject({ headword: z.string(), status: z.literal('not_saved'), reason: notSavedReason }),
+  z.strictObject({ headword: z.string(), status: z.literal('skipped'), reason: z.enum(['insufficient_context', 'already_owned']) }),
  ])),
  cards: z.array(cardSchema),
 })
@@ -52,6 +54,7 @@ export const imageJobResponse = z.object({
  job_id: z.string().uuid(),
  status: z.enum(['received', 'queued', 'recognizing', 'recognized', 'enriching', 'saving', 'completed', 'failed', 'needs_attention']),
  stage: z.string(), error_code: z.string().nullable(),
+ outcome: z.enum(['english', 'no_english', 'unreadable', 'saved', 'partial', 'no_new_words', 'no_reliable_words']).optional(),
  suggestions: z.array(vocabularySuggestionSchema).max(10).optional(),
  results: vocabularySaveResponse.shape.results.optional(), cards: z.array(cardSchema).optional(),
 })

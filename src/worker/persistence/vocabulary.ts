@@ -9,6 +9,10 @@ export type VocabularySaveResult = {
   card_id: string
 } | {
   headword: string
+  status: 'skipped'
+  reason: 'insufficient_context' | 'already_owned'
+} | {
+  headword: string
   status: 'ambiguous'
   reason: 'ambiguous_sense' | 'low_confidence'
   item: VocabularyPlan['item']
@@ -45,10 +49,9 @@ export async function saveVocabulary(
   if (!db.batch) throw new Error('D1 batch is required to save vocabulary.')
   const results: VocabularySaveResult[] = []
   for (const [planIndex, plan] of plans.entries()) {
-    if (plan.kind === 'ambiguous') {
-      results[planIndex] = { headword: plan.item.headword, status: 'ambiguous',
-        reason: plan.reason === 'low_confidence' ? 'low_confidence' : 'ambiguous_sense',
-        item: plan.item, options: plan.options ?? [] }
+    if (plan.kind === 'ambiguous' || plan.kind === 'skipped') {
+      results[planIndex] = { headword: plan.item.headword, status: 'skipped',
+        reason: plan.reason === 'already_owned' ? 'already_owned' : 'insufficient_context' }
       continue
     }
     if (plan.kind === 'invalid') {

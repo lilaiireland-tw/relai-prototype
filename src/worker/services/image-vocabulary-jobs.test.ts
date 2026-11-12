@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { prepareVocabulary } from './vocabulary-catalog'
+import type { VocabularySuggestion } from './vocabulary-image'
 import type { PersistenceDatabase, PersistenceStatement, SqlValue } from '../persistence/d1'
 import {
   acceptImageJob, consumeImageJobs, imageJobStatus, imageQuota, imageQuotaWindow, processImageJob, recoverFailedImageJob,
@@ -45,6 +46,10 @@ function sqliteD1(sqlite: DatabaseSync): PersistenceDatabase {
 }
 
 function modelOutput(value: unknown) {
+  if (typeof value === 'object' && value !== null && 'version' in value && value.version === 1 &&
+    'suggestions' in value && Array.isArray(value.suggestions)) {
+    value = { version: 2, outcome: 'english', suggestions: value.suggestions.map(item => ({ contextual_support: 'clear', ...item })) }
+  }
   return Response.json({ status: 'completed', steps: [{ type: 'model_output',
     content: [{ type: 'text', text: JSON.stringify(value) }] }] })
 }
@@ -106,8 +111,192 @@ function interleaveBeforeRun(env: ImageJobEnv, sqlMatch: string, interleave: () 
   return () => interleaved
 }
 
+function addCatalog(sqlite: DatabaseSync, id: string, item: VocabularySuggestion = suggestion, level: string | null = null) {
+  sqlite.prepare(`INSERT INTO vocabulary_catalog (id, headword, normalized_key, part_of_speech, part_of_speech_key,
+    sense_key, semantic_sense, cefr_level, source_dataset, source_version, provenance, zh_tw_definition,
+    english_example, zh_tw_example_translation, publication_status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test', '1', '{}', 'definition', 'An example.', 'translation', 'published', ?, ?)`)
+    .run(id, item.headword, item.headword.toLowerCase(), item.part_of_speech, item.part_of_speech,
+      item.semantic_sense.toLowerCase().replace(/[^a-z0-9]+/g, '-'), item.semantic_sense, level, now.toISOString(), now.toISOString())
+}
+
 describe('durable image vocabulary jobs', () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it.each(['no_english', 'unreadable'] as const)('completes %s as a normal empty outcome with no enrichment', async outcome => {
+    const { sqlite, env, objects } = environment()
+    try {
+      const provider = vi.fn(async () => modelOutput({ version: 2, outcome, suggestions: [] }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1]))
+        .toMatchObject({ status: 'completed', error_code: null, outcome, cards: [], results: [] })
+      await processImageJob(env, job.job_id, () => now)
+      expect(provider).toHaveBeenCalledOnce()
+      expect(objects.size).toBe(0)
+    } finally { sqlite.close() }
+  })
+
+  it.each([0, 6])('automatically saves %i supported English words from bilingual material and skips the rest despite high confidence', async validCount => {
+    const { sqlite, env } = environment()
+    try {
+      sqlite.prepare(`INSERT INTO user_settings (user_id, timezone, english_level, created_at, updated_at) VALUES ('owner', 'UTC', 'B1', ?, ?)`)
+        .run(now.toISOString(), now.toISOString())
+      const suggestions = ['map', 'apple', 'book', 'chair', 'door', 'lamp', 'river', 'tree', 'window', 'road']
+        .map((headword, index) => ({ ...suggestion, headword,
+          source_context: `Read the English word ${headword}. 英文教材`, contextual_support: index < validCount ? 'clear' : 'insufficient' }))
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 2, outcome: 'english', suggestions }))
+        .mockResolvedValueOnce(modelOutput({ version: 1, items: suggestions.slice(0, validCount).map((_, item_index) => ({
+          item_index, zh_tw_definition: 'definition', english_example: 'An example.', zh_tw_example_translation: 'translation',
+        })) }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      const status = await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])
+      expect(status).toMatchObject({ status: 'completed', outcome: validCount ? 'partial' : 'no_reliable_words', error_code: null })
+      expect(status.cards).toHaveLength(validCount)
+      expect(status.results?.slice(validCount)).toEqual(suggestions.slice(validCount).map(item => ({
+        headword: item.headword, status: 'skipped', reason: 'insufficient_context',
+      })))
+      expect(provider).toHaveBeenCalledTimes(validCount ? 2 : 1)
+      const recognition = JSON.parse(String(provider.mock.calls[0][1]?.body))
+      expect(recognition.input[0].text).toContain('verified CEFR level B1')
+      expect(recognition.input[0].text).toContain('bilingual Chinese/English')
+      expect(recognition.input[0].text).toContain('Shared Latin letters')
+      const contract = z.fromJSONSchema(recognition.response_format.schema)
+      expect(contract.safeParse({ version: 2, outcome: 'english', suggestions }).success).toBe(true)
+      expect(contract.safeParse({ version: 2, suggestions }).success).toBe(false)
+      expect(contract.safeParse({ version: 2, outcome: 'english', suggestions: [suggestion] }).success).toBe(false)
+    } finally { sqlite.close() }
+  })
+
+  it.each(['match', 'skip', 'invalid'])('handles catalog %s without generating complete catalog content', async action => {
+    const { sqlite, env } = environment()
+    try {
+      const bank = { ...suggestion, headword: 'bank', part_of_speech: 'noun' as const,
+        semantic_sense: 'a place beside a river', source_context: 'They sat on the bank beside the river.' }
+      addCatalog(sqlite, 'bank-financial', { ...bank, semantic_sense: 'financial institution' })
+      addCatalog(sqlite, 'bank-river', { ...bank, semantic_sense: 'land beside a river' })
+      const provider = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(modelOutput({ version: 1, suggestions: [bank] }))
+        .mockResolvedValueOnce(modelOutput({ version: action === 'invalid' ? 9 : 1,
+          matches: [{ item_index: 0, action, candidate_index: action === 'match' ? 1 : null, confidence: 0.99 }] }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      expect(sqlite.prepare('SELECT vocabulary_catalog_id FROM flashcards WHERE user_id = ?').all('owner'))
+        .toEqual(action === 'match' ? [{ vocabulary_catalog_id: 'bank-river' }] : [])
+      expect(sqlite.prepare('SELECT status, error_code FROM image_vocabulary_jobs WHERE job_id = ?').get(job.job_id))
+        .toEqual({ status: action === 'invalid' ? 'failed' : 'completed', error_code: action === 'invalid' ? 'NO_CARDS_SAVED' : null })
+      if (action === 'invalid') {
+        const plans = sqlite.prepare('SELECT plans_json FROM image_vocabulary_jobs WHERE job_id = ?').get(job.job_id) as { plans_json: string }
+        expect(JSON.parse(plans.plans_json)[0].validation_failure).toEqual({ stage: 'catalog_match', item_index: 0, code: 'response_schema' })
+      }
+      expect(provider).toHaveBeenCalledTimes(2)
+    } finally { sqlite.close() }
+  })
+
+  it('skips owned canonical senses before enrichment and keeps catalog CEFR priority with unknown fallback', async () => {
+    const { sqlite, env } = environment()
+    try {
+      const items = ['unknown', 'lower', 'target', 'owned'].map(headword => ({ ...suggestion, headword }))
+      items.forEach((item, index) => addCatalog(sqlite, item.headword, item, [null, 'A2', 'B1', 'B1'][index]))
+      sqlite.prepare(`INSERT INTO flashcards (id, user_id, card_type, vocabulary_catalog_id, created_at, updated_at)
+        VALUES ('original', 'owner', 'vocabulary', 'owned', ?, ?)`).run(now.toISOString(), now.toISOString())
+      sqlite.prepare(`INSERT INTO user_settings (user_id, timezone, english_level, created_at, updated_at) VALUES ('owner', 'UTC', 'B1', ?, ?)`)
+        .run(now.toISOString(), now.toISOString())
+      const provider = vi.fn(async () => modelOutput({ version: 1, suggestions: items }))
+      vi.stubGlobal('fetch', provider)
+      const prepare = vi.spyOn(env.DB, 'prepare')
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      const status = await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])
+      expect(status.cards).toHaveLength(3)
+      expect(status.results?.filter(item => item.status === 'saved').map(item => item.headword)).toEqual(['target', 'lower', 'unknown'])
+      expect(status.results).toContainEqual({ headword: 'owned', status: 'skipped', reason: 'already_owned' })
+      expect(provider).toHaveBeenCalledOnce()
+      const lookups = prepare.mock.calls.map(([sql]) => sql).filter(sql => sql.startsWith('SELECT * FROM (SELECT id,'))
+      expect(lookups).toHaveLength(1)
+      const plan = sqlite.prepare('EXPLAIN QUERY PLAN ' + lookups[0])
+        .all(...items.flatMap(item => [item.headword, item.part_of_speech]))
+        .map(row => row.detail).join('\n')
+      expect(plan).toContain('SEARCH vocabulary_catalog USING INDEX')
+      expect(plan).not.toContain('SCAN vocabulary_catalog')
+      // A later upload containing only the same owned sense is a normal empty result.
+      const second = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      provider.mockImplementation(async () => modelOutput({ version: 1, suggestions: [items[3]] }))
+      await processImageJob(env, second.job.job_id, () => now)
+      const secondRow = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(second.job.job_id).first()
+      expect(await imageJobStatus(env.DB, secondRow as Parameters<typeof imageJobStatus>[1]))
+        .toMatchObject({ status: 'completed', outcome: 'no_new_words', cards: [] })
+      expect(provider).toHaveBeenCalledTimes(2)
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 4 })
+    } finally { sqlite.close() }
+  })
+
+  it('safely skips legacy ambiguous plans and reads historical results without reprocessing completed jobs', async () => {
+    const { sqlite, env } = environment()
+    try {
+      const [plan] = await prepareVocabulary(env.DB, [{ ...suggestion, confidence: 0.5 }], env, 'legacy')
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET plans_json = ?, recognized_json = ? WHERE job_id = ?`)
+        .run(JSON.stringify([{ ...plan, kind: 'ambiguous', reason: 'low_confidence' }]),
+          JSON.stringify({ version: 1, suggestions: [suggestion] }), job.job_id)
+      const provider = vi.fn()
+      vi.stubGlobal('fetch', provider)
+      await processImageJob(env, job.job_id, () => now)
+      sqlite.prepare('UPDATE image_vocabulary_jobs SET results_json = ? WHERE job_id = ?')
+        .run(JSON.stringify({ results: [{ headword: 'curious', status: 'ambiguous', reason: 'low_confidence', item: suggestion, options: [] }], card_ids: [] }), job.job_id)
+      const row = await env.DB.prepare('SELECT * FROM image_vocabulary_jobs WHERE job_id = ?').bind(job.job_id).first()
+      expect((await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).results)
+        .toEqual([{ headword: 'curious', status: 'skipped', reason: 'insufficient_context' }])
+      await processImageJob(env, job.job_id, () => now)
+      expect(provider).not.toHaveBeenCalled()
+    } finally { sqlite.close() }
+  })
+
+  it('replays a version-one recognition provider checkpoint without another Gemini request', async () => {
+    const { sqlite, env } = environment()
+    try {
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      sqlite.prepare(`UPDATE image_vocabulary_jobs SET provider_state = 'completed', provider_results_json = ? WHERE job_id = ?`)
+        .run(JSON.stringify({
+          recognition: { model: 'legacy', value: { version: 1, suggestions: [suggestion] } },
+          catalog_generation: { model: 'legacy', value: { version: 1, items: [{ item_index: 0,
+            zh_tw_definition: 'definition', english_example: 'An example.', zh_tw_example_translation: 'translation' }] } },
+        }), job.job_id)
+      const provider = vi.fn()
+      vi.stubGlobal('fetch', provider)
+      await processImageJob(env, job.job_id, () => now)
+      expect(sqlite.prepare('SELECT status FROM image_vocabulary_jobs WHERE job_id = ?').get(job.job_id)).toEqual({ status: 'completed' })
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 1 })
+      expect(provider).not.toHaveBeenCalled()
+    } finally { sqlite.close() }
+  })
+
+  it.each([
+    { version: 2, outcome: 'no_english', suggestions: [{ ...suggestion, contextual_support: 'clear' }] },
+    { version: 2, outcome: 'english', suggestions: [suggestion] },
+    { version: 1, suggestions: [suggestion] },
+  ])('fails a fresh invalid recognition contract without enrichment: %j', async value => {
+    const { sqlite, env } = environment()
+    try {
+      const provider = vi.fn(async () => Response.json({ status: 'completed', steps: [{ type: 'model_output',
+        content: [{ type: 'text', text: JSON.stringify(value) }] }] }))
+      vi.stubGlobal('fetch', provider)
+      const { job } = await acceptImageJob(env, 'owner', crypto.randomUUID(), image, 'image/png', now)
+      await processImageJob(env, job.job_id, () => now)
+      expect(sqlite.prepare('SELECT status, error_code FROM image_vocabulary_jobs WHERE job_id = ?').get(job.job_id))
+        .toEqual({ status: 'failed', error_code: 'INVALID_PROVIDER_OUTPUT' })
+      await processImageJob(env, job.job_id, () => now)
+      expect(provider).toHaveBeenCalledOnce()
+    } finally { sqlite.close() }
+  })
 
   it.each([
     [{ version: 2, items: [] }, 'response_schema'],
@@ -129,7 +318,7 @@ describe('durable image vocabulary jobs', () => {
     } finally { warn.mockRestore(); sqlite.close() }
   })
 
-  it.each([{ suggestions: [] }, { suggestions: [{ ...suggestion, confidence: 0.5 }] }])('preserves empty recognition and intentional sense-confirmation completion: %j', async ({ suggestions }) => {
+  it.each([{ suggestions: [] }, { suggestions: [{ ...suggestion, confidence: 0.5 }] }])('completes normal empty recognition and skips uncertain candidates: %j', async ({ suggestions }) => {
     const { sqlite, env } = environment()
     try {
       const provider = vi.fn(async () => modelOutput({ version: 1, suggestions }))
@@ -195,7 +384,7 @@ describe('durable image vocabulary jobs', () => {
       expect(await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).toMatchObject({
         status: valid ? 'completed' : 'failed', stage: valid ? 'completed' : 'failed',
         error_code: valid ? null : 'NO_CARDS_SAVED',
-        results: [{ status: valid ? 'saved' : 'not_saved' }, { status: 'ambiguous' }],
+        results: [{ status: valid ? 'saved' : 'not_saved' }, { status: 'skipped', reason: 'insufficient_context' }],
         cards: valid ? [expect.objectContaining({ front_content: 'curious' })] : [],
       })
       const ack = vi.fn()
@@ -231,6 +420,7 @@ describe('durable image vocabulary jobs', () => {
         ...(failure === 'invalid_json' ? {} : { results: [{ status: 'not_saved',
           reason: failure === 'invalid_schema' ? 'invalid_content' : 'save_failed' }], cards: [] }),
       })
+      expect((await imageJobStatus(env.DB, row as Parameters<typeof imageJobStatus>[1])).outcome).toBeUndefined()
       await processImageJob(env, job.job_id, () => now)
       expect(provider).toHaveBeenCalledTimes(2)
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM flashcards').get()).toEqual({ count: 0 })
@@ -393,7 +583,7 @@ describe('durable image vocabulary jobs', () => {
       const row = sqlite.prepare('SELECT status, recognized_json, results_json FROM image_vocabulary_jobs WHERE job_id = ?')
         .get(accepted.job.job_id) as { status: string; recognized_json: string; results_json: string }
       expect(row.status).toBe('completed')
-      expect(JSON.parse(row.recognized_json)).toEqual({ version: 1, suggestions: [suggestion] })
+      expect(JSON.parse(row.recognized_json)).toEqual({ version: 1, outcome: 'english', suggestions: [{ ...suggestion, contextual_support: 'clear' }] })
       const result = await imageJobStatus(env.DB, { job_id: accepted.job.job_id, user_id: 'owner', status: 'completed',
         stage: 'completed', error_code: null, recognized_json: row.recognized_json, results_json: row.results_json })
       expect(result.results?.[0].status).toBe('saved')

@@ -34,6 +34,7 @@ export interface ImageVocabularySuggestion {
 export type ImageVocabularySelection = Pick<ImageVocabularySuggestion,
  'headword' | 'part_of_speech' | 'semantic_sense' | 'source_context'> & { resolve_sense?: boolean }
 export type VocabularySaveResult =
+ | { headword: string; status: 'skipped'; reason: 'insufficient_context' | 'already_owned' }
  | { headword: string; status: 'saved' | 'already_saved'; card_id: string }
  | { headword: string; status: 'ambiguous'; reason: 'ambiguous_sense' | 'low_confidence'; item: ImageVocabularySuggestion; options: { catalog_id: string; semantic_sense: string }[] }
  | { headword: string; status: 'not_saved'; reason: 'invalid_content' | 'enrichment_unavailable' | 'catalog_changed' | 'save_failed' }

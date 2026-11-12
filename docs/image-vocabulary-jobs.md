@@ -2,7 +2,13 @@
 
 Issue #103 supersedes the scheduled recovery described in the original B5.5 PRD. See [ADR: event-driven image sessions](adr/001-event-driven-image-jobs.md) for the decision and operational trade-offs.
 
-Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quota reservation. Queue messages contain only `job_id`. The consumer automatically runs `processImageJob() -> prepareVocabulary() -> saveVocabulary()`, persists results/cards, then communicates completion. No manual confirmation was added. Existing ambiguous-sense resolution remains available after processing.
+Authenticated upload returns `202` after the D1 job and Europe/Dublin daily quota reservation. Queue messages contain only `job_id`. The consumer automatically runs `processImageJob() -> prepareVocabulary() -> saveVocabulary()`, persists results/cards, then communicates completion. Uncertain senses are skipped without manual confirmation; legacy `resolve_sense` requests return 410 and `/vocabulary/save` only replays persisted results.
+
+Recognition contract v2 classifies `english`, `no_english`, or `unreadable` in the same image request. Bilingual material can supply English candidates; Latin spelling alone is not language evidence. Each candidate supplies contextual support as well as confidence. The request uses the validated user's stored CEFR setting, never a client level. Catalog levels order eligible senses; unknown levels remain eligible. Canonical ownership is checked in one bounded query before enrichment, and complete catalog content is reused. Full recommendation/backfill policy remains in #105.
+
+Completed jobs persist an `outcome`: `saved`, `partial`, `no_english`, `unreadable`, `no_new_words`, or `no_reliable_words`. Empty normal outcomes create no cards and are not system errors. A batch with failed saves and no saved/already-saved result fails with `NO_CARDS_SAVED`. Invalid fresh recognition schemas fail with `INVALID_PROVIDER_OUTPUT`; unknown external outcomes retain `needs_attention` without a paid retry. Partial success retains individual `skipped`/`not_saved` reasons.
+
+No migration is needed. Version-one recognition/provider checkpoints remain readable only for already checkpointed stages; legacy ambiguous plans/results become safe skips. Existing terminal jobs are not rewritten or reprocessed. Missing historical language metadata is never guessed as non-English or unreadable; the UI shows a neutral empty-result message.
 
 ## Session and recovery API
 

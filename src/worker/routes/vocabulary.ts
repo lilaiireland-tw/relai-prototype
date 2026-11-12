@@ -3,9 +3,7 @@ import { z } from 'zod'
 import type { AuthEnv } from '../auth/types'
 import { requireAuth, requirePasswordChanged } from '../middleware/auth'
 import { createRepositories } from '../persistence'
-import { listVocabularyReviewCandidates, reviewVocabularyCandidate, saveVocabulary, type VocabularySaveResult } from '../persistence/vocabulary'
-import { vocabularySuggestionSchema } from '../services/vocabulary-image'
-import { normalizeHeadword, normalizeSense, prepareVocabulary } from '../services/vocabulary-catalog'
+import { listVocabularyReviewCandidates, reviewVocabularyCandidate, type VocabularySaveResult } from '../persistence/vocabulary'
 import { abandonImageJob, currentImageJob, acceptImageJob, imageJobStatus, imageQuota, recoverFailedImageJob } from '../services/image-vocabulary-jobs'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -17,7 +15,6 @@ const selectionSchema = z.strictObject({
   source_context: z.string().trim().min(1).max(500),
   resolve_sense: z.boolean().optional(),
 })
-const extractionSchema = z.strictObject({ version: z.literal(1), suggestions: z.array(vocabularySuggestionSchema).max(10) })
 const saveInput = z.strictObject({
   source_item_id: z.string().uuid(),
   items: z.array(selectionSchema).min(1).max(10),
@@ -182,9 +179,9 @@ vocabulary.post('/save', async c => {
   const input = saveInput.safeParse(body)
   if (!input.success) return c.json({ error: { code: 'INVALID_INPUT', message: 'Select up to 10 valid vocabulary suggestions.' } }, 400)
   const userId = c.get('user').id
-  const source = await c.env.DB.prepare(`SELECT id, raw_text, ai_model FROM source_items
+  const source = await c.env.DB.prepare(`SELECT id FROM source_items
     WHERE id = ? AND user_id = ? AND source_type = 'image' AND processing_status = 'processed'`)
-    .bind(input.data.source_item_id, userId).first<{ id: string; raw_text: string | null; ai_model: string | null }>()
+    .bind(input.data.source_item_id, userId).first<{ id: string }>()
   if (!source) return c.json({ error: { code: 'SOURCE_NOT_FOUND', message: 'Image extraction was not found.' } }, 404)
   const job = await c.env.DB.prepare(`SELECT status, results_json, provider_state FROM image_vocabulary_jobs WHERE job_id = ? AND user_id = ?`)
     .bind(source.id, userId).first<{ status: string; results_json: string | null; provider_state: string }>()
@@ -195,64 +192,12 @@ vocabulary.post('/save', async c => {
   try { persisted = JSON.parse(job.results_json) as typeof persisted } catch {
     return c.json({ error: { code: 'IMAGE_JOB_RESULT_UNAVAILABLE', message: 'Persisted image results are unavailable.' } }, 409)
   }
-  if (input.data.items.every(item => !item.resolve_sense)) {
-    const cards = await Promise.all(persisted.card_ids.map(id => createRepositories(c.env.DB).flashcards.find(userId, id)))
-    return c.json({ results: persisted.results, cards: cards.filter(card => card !== null) })
+  if (input.data.items.some(item => item.resolve_sense)) {
+    return c.json({ error: { code: 'MANUAL_SENSE_RESOLUTION_REMOVED', message: 'Vocabulary is saved automatically; uncertain senses are skipped.' } }, 410)
   }
-  if (input.data.items.some(item => !item.resolve_sense)) {
-    return c.json({ error: { code: 'INVALID_INPUT', message: 'Resolve one persisted ambiguous sense at a time.' } }, 400)
-  }
-  let extraction: z.infer<typeof extractionSchema>
-  try {
-    extraction = extractionSchema.parse(JSON.parse(source.raw_text ?? ''))
-  } catch {
-    return c.json({ error: { code: 'EXTRACTION_NOT_FOUND', message: 'Recognized words are no longer available.' } }, 409)
-  }
-  for (const item of input.data.items) {
-    const allowed = persisted.results.some(result => result.status === 'ambiguous' &&
-      result.item.headword === item.headword && result.item.part_of_speech === item.part_of_speech &&
-      result.item.source_context === item.source_context &&
-      result.options.some(option => option.semantic_sense === item.semantic_sense))
-    if (!allowed) return c.json({ error: { code: 'INVALID_INPUT', message: 'Select a published sense offered for this image job.' } }, 400)
-  }
-  const bySelection = new Map(extraction.suggestions.map(item => [JSON.stringify([
-    item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
-  ]), item]))
-  const byContext = new Map<string, z.infer<typeof vocabularySuggestionSchema>[]>()
-  for (const item of extraction.suggestions) {
-    const key = JSON.stringify([item.headword, item.part_of_speech, item.source_context])
-    byContext.set(key, [...(byContext.get(key) ?? []), item])
-  }
-  const items = await Promise.all(input.data.items.map(async item => {
-    const exact = bySelection.get(JSON.stringify([
-      item.headword, item.part_of_speech, item.semantic_sense, item.source_context,
-    ]))
-    if (!item.resolve_sense) return exact
-    const matches = byContext.get(JSON.stringify([item.headword, item.part_of_speech, item.source_context]))
-    if (matches?.length !== 1) return undefined
-    const canonical = await c.env.DB.prepare(`SELECT id FROM vocabulary_catalog WHERE normalized_key = ?
-      AND part_of_speech_key = ? AND sense_key = ? AND publication_status = 'published'`)
-      .bind(normalizeHeadword(item.headword), item.part_of_speech, normalizeSense(item.semantic_sense))
-      .first<{ id: string }>()
-    return canonical ? { ...(exact ?? matches[0]), semantic_sense: item.semantic_sense, confidence: 1 } : undefined
-  }))
-  if (items.some(item => !item)) {
-    return c.json({ error: { code: 'INVALID_INPUT', message: 'Select words from this image extraction.' } }, 400)
-  }
-  let plans: Awaited<ReturnType<typeof prepareVocabulary>>
-  try {
-    plans = await prepareVocabulary(c.env.DB, items as z.infer<typeof vocabularySuggestionSchema>[],
-      c.env, source.ai_model ?? 'unknown', async () => { throw new Error('DURABLE_CHECKPOINT_REQUIRED') })
-  } catch (error) {
-    if (String(error).includes('DURABLE_CHECKPOINT_REQUIRED')) {
-      return c.json({ error: { code: 'IMAGE_JOB_CHECKPOINT_REQUIRED', message: 'This sense needs a durable image-job checkpoint.' } }, 409)
-    }
-    throw error
-  }
-  const results = await saveVocabulary(c.env.DB, userId, source.id, plans, new Date().toISOString())
-  const flashcards = createRepositories(c.env.DB).flashcards
-  const cards = await Promise.all(results.flatMap(result => 'card_id' in result
-    ? [flashcards.find(userId, result.card_id)] : []))
+  const cards = await Promise.all(persisted.card_ids.map(id => createRepositories(c.env.DB).flashcards.find(userId, id)))
+  const results = persisted.results.map(result => result.status === 'ambiguous'
+    ? { headword: result.headword, status: 'skipped', reason: 'insufficient_context' } : result)
   return c.json({ results, cards: cards.filter(card => card !== null) })
 })
 
