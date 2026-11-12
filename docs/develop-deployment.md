@@ -1,9 +1,12 @@
 # Develop deployment — Issues #108 / #110
 
-**Framework only: automatic delivery is disabled.** `staging-release.json` ships
-with `enabled: false` and no confirmed schema digest. This PR does not authorize
-activation, Dashboard changes, remote API calls or deployment. #110 activation
-and on-site acceptance remain pending Product Owner confirmation.
+**Repository release gate enabled by PO decision.** `staging-release.json` has
+`enabled: true` and the Linux-computed migration digest recorded below. PO has
+reported verification complete. Cloudflare Dashboard configuration, deployment
+token permissions and the first remote deployment still require PO acceptance;
+the repository setting does not prove that automatic delivery is operational.
+This document does not authorize Codex to change Dashboard settings, make remote
+API calls or deploy.
 
 | Source | Worker | D1 | R2 |
 |---|---|---|---|
@@ -50,7 +53,7 @@ protection, Cloudflare branch control, disabled previews, token custody, schema
 hold or remote-resource authorization. It does not authorize activation.
 
 Cloudflare's [default generated token](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#api-token)
-has broad permissions. Before enabling, PO must review a dedicated Builds-only
+has broad permissions. Before enabling delivery, PO must review a dedicated Builds-only
 user token for the intended account with only the permissions necessary to publish
 this Worker with its existing D1/EU R2/Queue bindings. Do not grant D1 SQL/migration,
 R2 object access, route edits or production access as a convenience. Cloudflare may
@@ -78,13 +81,13 @@ These are future operator steps, not authorization for Codex to execute them.
    repository migration history is current in staging, including previously added
    migrations, and confirm code/schema compatibility. No remote query is part of
    auto delivery. No table scans are implied by this confirmation.
-   For #110, the reported migration list says `No migrations to apply!`, but the
-   supplied schema-verifier output lacks its complete JSON summary and exit code.
-   Keep `enabled: false` and `migrations: null` until PO confirms exit 0 and `history`
-   matches all eight SQL filenames (0001–0008) at the reviewed commit. Also retain
-   the Dashboard/environment and token-scope checks below; a digest alone cannot
-   establish readiness. Codex must not rerun remote verification without separate
-   authorization.
+   For #110, PO reported verification complete and decided to enable the repository
+   release gate with the recorded digest. PO owns the verification evidence:
+   migration list with no pending migrations, schema-verifier exit 0 and complete
+   JSON/history matching all eight SQL filenames (0001–0008) at the reviewed commit.
+   Dashboard/environment and token-scope acceptance below remain required; a digest
+   alone cannot establish readiness. Codex must not rerun remote verification
+   without separate authorization.
 5. Compute the complete local migration digest (names and contents, not a commit
    diff) in a clean Linux checkout matching Builds (`core.autocrlf=false`) with
    this credential-cleared, network-isolated command. The digest covers raw bytes;
@@ -95,11 +98,11 @@ These are future operator steps, not authorization for Codex to execute them.
    node --import ./scripts/deny-remote-network.mjs --input-type=module -e "import { directoryDigest } from './scripts/staging-build-record.mjs'; console.log(directoryDigest('migrations'))"
    ```
 
-   In a separately reviewed activation PR, set `staging-release.json` to
-   `{"enabled":true,"migrations":"<confirmed 64-character digest>"}`. PO approval
-   must explicitly adopt the scoped standing delivery policy. Merge only while
-   Builds is stopped. A digest is a recorded human assertion, not proof of live
-   schema. Schema drift outside repository migrations requires an immediate hold.
+   PR #111 records PO's decision with `enabled: true` and the 64-character digest
+   listed below in `staging-release.json`. PO approval must explicitly adopt the
+   scoped standing delivery policy. Merge only while Builds is stopped. A digest
+   is a recorded human assertion, not proof of live schema. Schema drift outside
+   repository migrations requires an immediate hold.
 6. Audit the following settings under **Workers & Pages → relai-prototype-staging
    → Settings → Builds**. [Connect an existing Worker](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker),
    [branch controls](https://developers.cloudflare.com/workers/ci-cd/builds/build-branches/),
@@ -154,9 +157,9 @@ Docker Desktop WSL computed the complete `directoryDigest('migrations')`:
   with `git show <commit>:migrations/<filename>` and matched. All eight SQL files
   have LF endings; README retains its committed mixed endings. Do not normalize
   that file: the digest covers the entire directory, including README.
-- The existing network/credential isolation preload was used. No remote
-  Cloudflare requests or schema checks ran. This digest is evidence of repository
-  bytes only; `staging-release.json` remains disabled with no approved digest.
+- The existing network/credential isolation preload was used. Codex made no remote
+  Cloudflare requests or schema checks. This digest is evidence of repository
+  bytes only; PO subsequently set it in `staging-release.json` with `enabled: true`.
 
 To reproduce in a fresh Linux checkout with Git and Node 24 installed:
 
@@ -169,7 +172,7 @@ git ls-files --eol migrations
 node --import ./scripts/deny-remote-network.mjs --input-type=module -e "import { directoryDigest } from './scripts/staging-build-record.mjs'; console.log(process.platform, process.version); console.log(directoryDigest('migrations'))"
 ```
 
-Use the reviewed commit for any later activation and recompute if any directory
+Use the reviewed commit for release confirmation and recompute if any directory
 entry changes. A converted Windows checkout or archive may produce a different
 digest; never adopt that result to bypass the hold.
 
