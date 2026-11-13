@@ -148,10 +148,28 @@ function semanticMatchPrompt(items: { itemIndex: number; item: VocabularySuggest
   return `For each recognized English word, use headword, part_of_speech, detected_sense and source_context to compare with the supplied published senses. Choose match only when the source context clearly expresses that same sense. Choose new only when it is clearly a different sense, never merge by spelling alone. Choose skip when context is insufficient or candidates conflict; never ask the learner to confirm. Do not create IDs or keys. Return contract version 1 and exactly one decision per item. Confidence alone does not establish correctness: the source context and catalog meaning must agree.\n${JSON.stringify(input)}`
 }
 
-export function generationPrompt(items: { item_index: number; item: VocabularySuggestion; missing: LexicalField[];
-  existing: Partial<LexicalContent> }[]) {
-  return `Generate only missing lexical fields for each English sense. For zh_tw_definition, give 1–3 concise, idiomatic Taiwan Traditional Chinese dictionary equivalents, ordered by relevance and separated by 「；」; prefer established equivalents over translating the full English description. Choose the sense from headword, part_of_speech, semantic_sense, and source_context, and keep each meaning grammatically consistent with the part of speech. Example: political (adjective) → 政治的；政治上的. Generate a natural English example that demonstrates the sense and a faithful, fluent Taiwan Traditional Chinese translation; never quote the source context. Optionally provide 0–2 common, useful, sense-appropriate usage_patterns; return [] when none is useful, including ordinary nouns without a notable pattern. Keep these distinctions correct: used to + base verb means a past habit ("She used to walk to work."); be used to + noun or V-ing means accustomed to ("She is used to walking to work."); use something to + base verb means use it for an action ("She used a map to find the station."). Never label "use to + verb" as accustomed to. Do not change existing non-empty canonical content. Return contract version 1 with exactly one item per input item.\n${JSON.stringify(items)}`
+
+export function generationPrompt(items: {
+  item_index: number;
+  item: VocabularySuggestion;
+  missing: LexicalField[];
+  existing: Partial<LexicalContent>;
+}[]) {
+  return `Generate only missing lexical fields for each English sense.
+
+For zh_tw_definition, provide 1–3 concise, natural Taiwan Traditional Chinese dictionary equivalents separated by 「；」. Prefer established translations, not explanatory sentences. Avoid phrases like 「指…的東西」, 「用於…的物質」 or 「即…」. Do not add redundant meanings.
+
+Choose the correct sense using headword, part_of_speech, semantic_sense and source_context. Match the part of speech and context. Ignore generic legacy sense descriptions.
+
+Generate a natural English example and a fluent, faithful Taiwan Traditional Chinese translation. Do not copy source_context or use literal translation.
+
+Optionally include 0–2 useful usage_patterns; return [] if none. Distinguish "used to + verb" (past habit) from "be used to + noun/V-ing" (accustomed to).
+
+Preserve existing non-empty content. Return contract version 1, exactly one item per input item, matching item_index and the required JSON schema.
+
+${JSON.stringify(items)}`;
 }
+
 
 export async function prepareVocabulary(
   db: PersistenceDatabase, items: VocabularySuggestion[],

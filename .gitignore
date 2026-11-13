@@ -30,6 +30,9 @@
 /dist
 /.wrangler/
 /data/cefr-j-local/
+/data/catalog-local/
+/relai_dict_fix.csv
+/vocabulary_catalog_export.sql
 .dev.vars*
 
 # misc

@@ -35,6 +35,7 @@
     "deploy:production": "node scripts/deploy-production.mjs",
     "user:manage": "tsx scripts/manage-user.ts",
     "catalog:import": "tsx scripts/import-cefr-j.ts",
+    "catalog:correct": "tsx scripts/import-catalog-corrections.ts",
     "test:admin": "node scripts/run-isolated-tests.mjs admin",
     "test:e2e": "node scripts/run-isolated-tests.mjs e2e",
     "test:e2e:headed": "node scripts/run-isolated-tests.mjs e2e --headed",
